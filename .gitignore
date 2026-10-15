@@ -1,0 +1,14 @@
+# Environment secrets
+.env
+
+# Python bytecode
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Local Databases (optional)
+# paper_trading_terminal/paper_trading.db
+
+# OS files
+.DS_Store
+Thumbs.db

@@ -1,0 +1,292 @@
+//@version=5
+strategy("NSE 4-Tier Institutional Clean Breakout Strategy [5m]", overlay=true, initial_capital=100000, default_qty_type=strategy.percent_of_equity, default_qty_value=100, commission_type=strategy.commission.percent, commission_value=0.03)
+
+// =============================================================================
+// 1. INPUT SETTINGS & PARAMETERS
+// =============================================================================
+grp_core    = "Strategy Core Parameters"
+ema_len     = input.int(9, "EMA Length", group=grp_core)
+buffer_pct  = input.float(0.20, "Clean PDH/PDL Buffer Zone (%)", minval=0.0, step=0.05, group=grp_core) / 100.0
+r_mult_t1   = input.float(2.0, "Target 1 R-Multiple (50% Book + Cost SL)", minval=1.0, step=0.5, group=grp_core)
+r_mult_t2   = input.float(3.0, "Target 2 R-Multiple (Runner)", minval=1.5, step=0.5, group=grp_core)
+
+grp_time    = "Time Window Filters (IST)"
+start_hour  = input.int(9, "Start Hour", minval=9, maxval=15, group=grp_time)
+start_min   = input.int(20, "Start Minute", minval=0, maxval=59, group=grp_time)
+cutoff_hour = input.int(12, "Entry Cutoff Hour (No New Entries)", minval=10, maxval=15, group=grp_time)
+cutoff_min  = input.int(0, "Entry Cutoff Minute", minval=0, maxval=59, group=grp_time)
+eod_hour    = input.int(15, "Intraday Square-off Hour", minval=14, maxval=15, group=grp_time)
+eod_min     = input.int(15, "Intraday Square-off Minute", minval=0, maxval=59, group=grp_time)
+
+grp_ui      = "Visual & Dashboard Settings"
+show_levels = input.bool(true, "Show Clean PDH / PDL Lines", group=grp_ui)
+show_labels = input.bool(true, "Show Entry & SL Signals on Chart", group=grp_ui)
+show_table  = input.bool(true, "Show Live 9-EMA Alignment Table", group=grp_ui)
+nifty_sym   = input.symbol("NSE:NIFTY", "Nifty 50 Benchmark Ticker", group=grp_ui)
+
+// =============================================================================
+// 2. INDICATOR & BENCHMARK CALCULATIONS
+// =============================================================================
+ema9 = ta.ema(close, ema_len)
+plot(ema9, "9 EMA", color=color.new(#00e5ff, 0), linewidth=2)
+
+// Nifty 50 Benchmark Check
+[n_close, n_open] = request.security(nifty_sym, timeframe.period, [close, open], lookahead=barmerge.lookahead_off)
+n_ema9 = request.security(nifty_sym, timeframe.period, ta.ema(close, ema_len), lookahead=barmerge.lookahead_off)
+nifty_above_ema = n_close >= n_ema9
+stock_above_ema = close >= ema9
+
+// =============================================================================
+// 3. CLEAN PDH & CLEAN PDL (EXCLUDING 09:15 & 15:25 FREAK WICKS)
+// =============================================================================
+is_new_day = ta.change(time("D")) != 0
+
+var int bar_in_day = 0
+if is_new_day
+    bar_in_day := 1
+else
+    bar_in_day += 1
+
+// Clean intraday hours: Exclude 1st candle (09:15) and last candle (15:25)
+is_clean_time = (bar_in_day > 1) and (hour < 15 or (hour == 15 and minute < 25))
+
+var float cur_clean_h = na
+var float cur_clean_l = na
+var float clean_pdh   = na
+var float clean_pdl   = na
+
+if is_new_day
+    clean_pdh := cur_clean_h
+    clean_pdl := cur_clean_l
+    cur_clean_h := na
+    cur_clean_l := na
+
+if is_clean_time
+    cur_clean_h := na(cur_clean_h) ? high : math.max(cur_clean_h, high)
+    cur_clean_l := na(cur_clean_l) ? low  : math.min(cur_clean_l, low)
+
+// Plot Clean PDH & Clean PDL lines
+plot(show_levels and not na(clean_pdh) ? clean_pdh : na, "Clean PDH", color=color.new(#00e676, 30), linewidth=2, style=plot.style_linebr)
+plot(show_levels and not na(clean_pdl) ? clean_pdl : na, "Clean PDL", color=color.new(#ff1744, 30), linewidth=2, style=plot.style_linebr)
+
+// Time Filter: Entry only between 09:20 and 12:00 PM IST
+in_entry_window = (hour > start_hour or (hour == start_hour and minute >= start_min)) and (hour < cutoff_hour or (hour == cutoff_hour and minute <= cutoff_min))
+is_eod = (hour == eod_hour and minute >= eod_min) or (hour > eod_hour)
+
+// =============================================================================
+// 4. STRATEGY STATE MACHINE (LONG & SHORT TRACKING)
+// =============================================================================
+// States: 0 = IDLE, 1 = BREAKOUT/BREAKDOWN, 2 = PULLBACK_CONFIRMED, 3 = ACTIVE_TRADE
+var int   bull_state   = 0
+var float swing_high   = na
+var float bull_entry   = na
+var float bull_sl      = na
+var float bull_t1      = na
+var float bull_t2      = na
+var bool  bull_t1_hit  = false
+
+var int   bear_state   = 0
+var float swing_low    = na
+var float bear_entry   = na
+var float bear_sl      = na
+var float bear_t1      = na
+var float bear_t2      = na
+var bool  bear_t1_hit  = false
+
+if is_new_day
+    bull_state   := 0
+    swing_high   := na
+    bull_entry   := na
+    bull_sl      := na
+    bull_t1      := na
+    bull_t2      := na
+    bull_t1_hit  := false
+
+    bear_state   := 0
+    swing_low    := na
+    bear_entry   := na
+    bear_sl      := na
+    bear_t1      := na
+    bear_t2      := na
+    bear_t1_hit  := false
+
+ema_rising  = ema9 >= ema9[1] * 0.9995
+ema_falling = ema9 <= ema9[1] * 1.0005
+
+// -----------------------------------------------------------------------------
+// 🟢 BULLISH SETUP (CLEAN PDH BREAKOUT + 9 EMA PULLBACK + SWING HIGH BREAK)
+// -----------------------------------------------------------------------------
+pdh_buf = not na(clean_pdh) ? math.max(0.50, clean_pdh * buffer_pct) : 0.50
+
+// Stage 1: Clean PDH Zone Tested
+if bull_state == 0 and in_entry_window and not na(clean_pdh)
+    if high >= (clean_pdh - pdh_buf)
+        bull_state := 1
+        swing_high := high
+
+// Stage 2: Pullback to 9 EMA & Strong Green Candle Closed Above 9 EMA
+else if bull_state == 1 and in_entry_window
+    if high > swing_high and close >= open
+        swing_high := high
+    else if low <= ema9 * 1.003
+        if close > open and close >= ema9 and ema_rising
+            bull_state := 2
+
+// Stage 3: Swing High Breakout Entry Trigger
+else if bull_state == 2 and in_entry_window
+    if high >= swing_high
+        bull_state  := 3
+        bull_entry  := math.max(open, swing_high + 0.10)
+        
+        // USER RULE: SL at Low of the candle immediately preceding entry candle
+        prev_low    = low[1]
+        bull_sl     := prev_low
+        if bull_sl >= bull_entry
+            bull_sl := math.min(prev_low, bull_entry * 0.996)
+            
+        risk_pts    = math.max(0.10, bull_entry - bull_sl)
+        bull_t1     := bull_entry + (r_mult_t1 * risk_pts)
+        bull_t2     := bull_entry + (r_mult_t2 * risk_pts)
+        bull_t1_hit := false
+        
+        // Execute Strategy Entry
+        strategy.entry("BUY_CALL", strategy.long, stop=bull_entry)
+        
+        if show_labels
+            label.new(bar_index, low - (high-low)*0.3, "🟢 BUY ENTRY @ " + str.tostring(bull_entry, "#.##") + "\nSL: " + str.tostring(bull_sl, "#.##") + "\nT1: " + str.tostring(bull_t1, "#.##") + "\nT2: " + str.tostring(bull_t2, "#.##"), color=color.green, textcolor=color.white, style=label.style_label_up, size=size.small)
+        
+        alert("🟢 BUY ENTRY CONFIRMED! Live: " + str.tostring(bull_entry) + " | SL: " + str.tostring(bull_sl) + " | T1: " + str.tostring(bull_t1), alert.freq_once_per_bar_close)
+
+    else if close < ema9 * 0.985
+        bull_state := 0
+
+// -----------------------------------------------------------------------------
+// 🔴 BEARISH SETUP (CLEAN PDL BREAKDOWN + 9 EMA RETEST + SWING LOW BREAK)
+// -----------------------------------------------------------------------------
+pdl_buf = not na(clean_pdl) ? math.max(0.50, clean_pdl * buffer_pct) : 0.50
+
+// Stage 1: Clean PDL Zone Tested
+if bear_state == 0 and in_entry_window and not na(clean_pdl)
+    if low <= (clean_pdl + pdl_buf)
+        bear_state := 1
+        swing_low  := low
+
+// Stage 2: Pullback to 9 EMA & Strong Red Candle Closed Below 9 EMA
+else if bear_state == 1 and in_entry_window
+    if low < swing_low and close <= open
+        swing_low := low
+    else if high >= ema9 * 0.997
+        if close < open and close <= ema9 and ema_falling
+            bear_state := 2
+
+// Stage 3: Swing Low Breakdown Entry Trigger
+else if bear_state == 2 and in_entry_window
+    if low <= swing_low
+        bear_state  := 3
+        bear_entry  := math.min(open, swing_low - 0.10)
+        
+        // USER RULE: SL at High of the candle immediately preceding entry candle
+        prev_high   = high[1]
+        bear_sl     := prev_high
+        if bear_sl <= bear_entry
+            bear_sl := math.max(prev_high, bear_entry * 1.004)
+            
+        risk_pts    = math.max(0.10, bear_sl - bear_entry)
+        bear_t1     := bear_entry - (r_mult_t1 * risk_pts)
+        bear_t2     := bear_entry - (r_mult_t2 * risk_pts)
+        bear_t1_hit := false
+        
+        // Execute Strategy Entry
+        strategy.entry("SELL_PUT", strategy.short, stop=bear_entry)
+        
+        if show_labels
+            label.new(bar_index, high + (high-low)*0.3, "🔴 SHORT ENTRY @ " + str.tostring(bear_entry, "#.##") + "\nSL: " + str.tostring(bear_sl, "#.##") + "\nT1: " + str.tostring(bear_t1, "#.##") + "\nT2: " + str.tostring(bear_t2, "#.##"), color=color.red, textcolor=color.white, style=label.style_label_down, size=size.small)
+        
+        alert("🔴 SHORT ENTRY CONFIRMED! Live: " + str.tostring(bear_entry) + " | SL: " + str.tostring(bear_sl) + " | T1: " + str.tostring(bear_t1), alert.freq_once_per_bar_close)
+
+    else if close > ema9 * 1.015
+        bear_state := 0
+
+// =============================================================================
+// 5. TRADE MANAGEMENT & EXITS (1:2 T1 BOOK, SL TO COST, 9 EMA TRAILING)
+// =============================================================================
+if strategy.position_size > 0
+    // Check Target 1 (1:2 R:R)
+    if high >= bull_t1 and not bull_t1_hit
+        bull_t1_hit := true
+        bull_sl     := bull_entry // SL moved to Cost!
+        strategy.exit("T1_BOOK_50", "BUY_CALL", qty_percent=50, limit=bull_t1)
+        alert("🎯 Target 1 Hit! 50% Profit Booked, SL Moved to Cost @ " + str.tostring(bull_entry), alert.freq_once_per_bar_close)
+
+    // Check Target 2 (1:3 R:R)
+    if high >= bull_t2
+        strategy.close("BUY_CALL", comment="TARGET 2 HIT (+3R)")
+        bull_state := 0
+
+    // Trailing SL: 5m Candle Close Below 9 EMA
+    if bull_t1_hit and close < ema9
+        strategy.close("BUY_CALL", comment="9 EMA CLOSE EXIT")
+        bull_state := 0
+
+    // Stop Loss Hit
+    if low <= bull_sl
+        strategy.close("BUY_CALL", comment=bull_t1_hit ? "COST_EXIT" : "SL_HIT")
+        bull_state := 0
+
+    // EOD Exit
+    if is_eod
+        strategy.close("BUY_CALL", comment="EOD_EXIT")
+        bull_state := 0
+
+if strategy.position_size < 0
+    // Check Target 1 (1:2 R:R)
+    if low <= bear_t1 and not bear_t1_hit
+        bear_t1_hit := true
+        bear_sl     := bear_entry // SL moved to Cost!
+        strategy.exit("T1_BOOK_50", "SELL_PUT", qty_percent=50, limit=bear_t1)
+        alert("🎯 Short Target 1 Hit! 50% Profit Booked, SL Moved to Cost @ " + str.tostring(bear_entry), alert.freq_once_per_bar_close)
+
+    // Check Target 2 (1:3 R:R)
+    if low <= bear_t2
+        strategy.close("SELL_PUT", comment="TARGET 2 HIT (+3R)")
+        bear_state := 0
+
+    // Trailing SL: 5m Candle Close Above 9 EMA
+    if bear_t1_hit and close > ema9
+        strategy.close("SELL_PUT", comment="9 EMA CLOSE EXIT")
+        bear_state := 0
+
+    // Stop Loss Hit
+    if high >= bear_sl
+        strategy.close("SELL_PUT", comment=bear_t1_hit ? "COST_EXIT" : "SL_HIT")
+        bear_state := 0
+
+    // EOD Exit
+    if is_eod
+        strategy.close("SELL_PUT", comment="EOD_EXIT")
+        bear_state := 0
+
+// =============================================================================
+// 6. ON-SCREEN LIVE DASHBOARD & 9-EMA ALIGNMENT CHECKLIST
+// =============================================================================
+var table info_table = table.new(position.top_right, 2, 6, bgcolor=color.new(#131722, 10), border_color=color.new(#363c4e, 0), border_width=1)
+
+if show_table and barstate.islast
+    table.cell(info_table, 0, 0, "4-TIER STRATEGY RADAR", bgcolor=color.new(#2962ff, 20), text_color=color.white, text_size=size.small)
+    table.cell(info_table, 1, 0, "5M LIVE STATUS", bgcolor=color.new(#2962ff, 20), text_color=color.white, text_size=size.small)
+
+    table.cell(info_table, 0, 1, "Clean PDH / PDL", text_color=color.white, text_size=size.small)
+    table.cell(info_table, 1, 1, str.tostring(clean_pdh, "#.##") + " / " + str.tostring(clean_pdl, "#.##"), text_color=color.yellow, text_size=size.small)
+
+    table.cell(info_table, 0, 2, "Nifty 50 9-EMA", text_color=color.white, text_size=size.small)
+    table.cell(info_table, 1, 2, nifty_above_ema ? "ABOVE 9-EMA 🟢" : "BELOW 9-EMA 🔴", text_color=nifty_above_ema ? color.green : color.red, text_size=size.small)
+
+    table.cell(info_table, 0, 3, "Stock 9-EMA", text_color=color.white, text_size=size.small)
+    table.cell(info_table, 1, 3, stock_above_ema ? "ABOVE 9-EMA 🟢" : "BELOW 9-EMA 🔴", text_color=stock_above_ema ? color.green : color.red, text_size=size.small)
+
+    status_str = bull_state == 3 ? "LONG ACTIVE 🟢" : bear_state == 3 ? "SHORT ACTIVE 🔴" : bull_state == 2 ? "BUY READY ⏳" : bear_state == 2 ? "SELL READY ⏳" : in_entry_window ? "SCANNING ⚡" : "WINDOW CLOSED ⏸️"
+    table.cell(info_table, 0, 4, "Setup State", text_color=color.white, text_size=size.small)
+    table.cell(info_table, 1, 4, status_str, text_color=color.white, text_size=size.small)
+
+    table.cell(info_table, 0, 5, "Entry Cutoff", text_color=color.white, text_size=size.small)
+    table.cell(info_table, 1, 5, "12:00 PM IST Max", text_color=color.gray, text_size=size.small)
