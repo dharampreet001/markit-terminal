@@ -398,10 +398,11 @@ def run_live_scanner():
             m_now = now_ist.minute
             
             # -------------------------------------------------------------------------
-            # 05:00 AM DAILY RADAR RESET & CLEAN LEVEL RECALCULATION
+            # 07:15 AM DAILY RADAR RESET & CLEAN LEVEL RECALCULATION (2H BEFORE OPEN)
             # -------------------------------------------------------------------------
-            if h_now >= 5 and current_scanner_date != today_str:
-                print(f"\n[05:00 AM RESET] New trading day detected: {today_str}. Archiving yesterday's radar & resetting...")
+            is_reset_time = (h_now > 7) or (h_now == 7 and m_now >= 15)
+            if is_reset_time and current_scanner_date != today_str:
+                print(f"\n[07:15 AM RESET] New trading day detected: {today_str}. Archiving yesterday's radar & resetting...")
                 archive_dir = os.path.join(BASE_DIR, 'paper_trading_terminal', 'radar_archive')
                 os.makedirs(archive_dir, exist_ok=True)
                 if os.path.exists(ALERTS_CACHE_FILE):
@@ -423,7 +424,7 @@ def run_live_scanner():
                 trackers = initialize_clean_levels(symbols)
                 tickers = [f"{s}.NS" for s in trackers.keys()]
                 current_scanner_date = today_str
-                print(f"[05:00 AM RESET] Radar cleared & fresh levels calculated for {today_str}!\n")
+                print(f"[07:15 AM RESET] Radar cleared & fresh levels calculated for {today_str}!\n")
 
             # Market hours check (09:15 to 15:30 IST)
             if not is_test_run:
@@ -433,7 +434,17 @@ def run_live_scanner():
                     continue
                     
                 if h_now > 15 or (h_now == 15 and m_now > 30):
-                    print(f"[{now_str}] Market closed for today. Scanner in standby mode.")
+                    print(f"[{now_str}] Market closed for today (15:30 IST). Radar & trades preserved for off-market analysis.")
+                    try:
+                        import database as db
+                        open_p = db.get_open_positions()
+                        if open_p:
+                            print(f"[{now_str}] 03:30 PM Market Close! Auto squaring off {len(open_p)} open positions...")
+                            db.square_off_all_positions(exit_reason="Auto Market Close (03:30 PM)")
+                            print(f"[{now_str}] Wallet balance and realized P&L settled!")
+                    except Exception as e_eod:
+                        print(f"[EOD AUTO CLOSE ERR] {e_eod}")
+
                     if is_github_actions:
                         print("[GITHUB ACTIONS] Market hours completed. Gracefully exiting runner.")
                         try:

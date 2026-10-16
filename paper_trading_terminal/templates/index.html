@@ -1104,8 +1104,10 @@
     let radarSubTab = "radar"; // 'radar' or 'verified'
     let radarDirectionMode = "LONG"; // 'LONG' (Bullish) or 'SHORT' (Bearish)
     let radarFolderFilter = "confirm"; // 'verified', 'confirm', 'pullback', 'ldh', 'cancelled'
-    let radarStageFilter = "all"; // 'all', 3, 2, 1
     let openPositions = [];
+    let todayClosedTrades = [];
+    let todayRealizedPnl = 0.0;
+    let isMarketClosed = false;
     let walletInfo = { balance: 100000, used_margin: 0, available_margin: 100000, realized_pnl: 0 };
     let watchlistFilter = "ALL";
     let marketOverviewData = null;
@@ -3774,6 +3776,9 @@
         const res = await fetch("/api/positions");
         const data = await res.json();
         openPositions = data.positions || [];
+        todayClosedTrades = data.today_closed_trades || [];
+        todayRealizedPnl = data.today_realized_pnl || 0.0;
+        isMarketClosed = data.is_market_closed || false;
         const badge = document.getElementById("badge-positions-count");
         if (badge) badge.innerText = openPositions.length;
         const navBadge = document.getElementById("nav-badge-positions");
@@ -4006,6 +4011,29 @@
       const redTrades = openPositions.filter(p => (p.unrealized_pnl || 0) < 0).length;
 
       container.innerHTML = `
+        <!-- OFF-MARKET OR ACTIVE NOTICE BANNER -->
+        ${isMarketClosed ? `
+          <div class="px-4 py-2.5 rounded-2xl bg-gradient-to-r from-blue-500/10 via-purple-500/10 to-transparent border border-blue-200 dark:border-blue-800 text-xs mb-3 flex items-center justify-between shadow-xs">
+            <div class="flex items-center space-x-2.5">
+              <span class="w-7 h-7 rounded-xl bg-purple-600 text-white flex items-center justify-center font-bold text-xs shrink-0 shadow-xs">
+                <i class="fa-solid fa-moon"></i>
+              </span>
+              <div>
+                <div class="flex items-center space-x-1.5">
+                  <b class="text-gray-900 dark:text-white font-bold">🌙 Off-Market Analysis Mode Active (Market Closed 03:30 PM)</b>
+                  <span class="px-1.5 py-0.2 rounded bg-purple-100 text-purple-800 dark:bg-purple-950 dark:text-purple-300 text-[9px] font-bold font-mono">PRESERVED</span>
+                </div>
+                <div class="text-[11px] text-gray-500 dark:text-gray-400">
+                  Sabhi trades aur radar alerts raat bhar analysis ke liye safe hain. Agla reset subah <b>07:15 AM IST (Market se 2 ghante pehle)</b> hoga.
+                </div>
+              </div>
+            </div>
+            <span class="text-[11px] font-mono text-purple-600 dark:text-purple-400 font-bold px-2.5 py-1 rounded-lg bg-purple-50 dark:bg-purple-950/40 border border-purple-200 dark:border-purple-800">
+              Wallet P&L Settled ✅
+            </span>
+          </div>
+        ` : ''}
+
         <!-- TOP STATS CARDS BAR -->
         <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
           <!-- 1. Total Live P&L Card -->
@@ -4013,15 +4041,15 @@
             <div class="flex items-center justify-between text-xs text-gray-500 dark:text-gray-400">
               <span class="font-medium flex items-center">
                 <span class="w-2.5 h-2.5 rounded-full ${isProfit ? 'bg-emerald-500 animate-pulse' : 'bg-rose-500'} mr-1.5"></span>
-                Total Live Unrealized P&L
+                ${openPositions.length > 0 ? 'Total Live Unrealized P&L' : "Today's Settled P&L"}
               </span>
-              <span class="text-[10px] font-mono px-2 py-0.5 rounded font-bold ${isProfit ? 'bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300' : 'bg-rose-100 text-rose-800 dark:bg-rose-950 dark:text-rose-300'}">
-                ${isProfit ? 'PROFIT 🟢' : 'LOSS 🔴'}
+              <span class="text-[10px] font-mono px-2 py-0.5 rounded font-bold ${(openPositions.length > 0 ? isProfit : todayRealizedPnl >= 0) ? 'bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300' : 'bg-rose-100 text-rose-800 dark:bg-rose-950 dark:text-rose-300'}">
+                ${(openPositions.length > 0 ? isProfit : todayRealizedPnl >= 0) ? 'PROFIT 🟢' : 'LOSS 🔴'}
               </span>
             </div>
             <div class="my-2">
-              <span class="text-2xl font-bold font-mono ${isProfit ? 'text-emerald-600 dark:text-emerald-400' : 'text-rose-600 dark:text-rose-400'}">
-                ${isProfit ? '+' : ''}₹${totalUnrealized.toLocaleString('en-IN', {minimumFractionDigits: 2, maximumFractionDigits: 2})}
+              <span class="text-2xl font-bold font-mono ${(openPositions.length > 0 ? isProfit : todayRealizedPnl >= 0) ? 'text-emerald-600 dark:text-emerald-400' : 'text-rose-600 dark:text-rose-400'}">
+                ${(openPositions.length > 0 ? (isProfit ? '+' : '') + '₹' + totalUnrealized.toLocaleString('en-IN', {minimumFractionDigits: 2, maximumFractionDigits: 2}) : (todayRealizedPnl >= 0 ? '+' : '') + '₹' + todayRealizedPnl.toLocaleString('en-IN', {minimumFractionDigits: 2, maximumFractionDigits: 2}))}
               </span>
             </div>
             <div class="flex justify-between text-[11px] font-mono text-gray-500">
@@ -4034,7 +4062,7 @@
           <div class="bg-white dark:bg-[#111827] p-4 rounded-2xl border border-gray-200 dark:border-gray-800 shadow-xs flex flex-col justify-between">
             <div class="flex items-center justify-between text-xs text-gray-500 dark:text-gray-400">
               <span class="font-medium">Active Open Positions</span>
-              <span class="text-[10px] font-mono bg-blue-50 dark:bg-blue-950/60 text-blue-600 dark:text-blue-400 px-1.5 py-0.5 rounded font-bold">LIVE DESK</span>
+              <span class="text-[10px] font-mono bg-blue-50 dark:bg-blue-950/60 text-blue-600 dark:text-blue-400 px-1.5 py-0.5 rounded font-bold">${isMarketClosed ? 'EOD SETTLED' : 'LIVE DESK'}</span>
             </div>
             <div class="my-2 flex items-baseline space-x-2">
               <span class="text-2xl font-bold font-mono text-gray-900 dark:text-white">${openPositions.length}</span>
@@ -4049,15 +4077,15 @@
           <!-- 3. Virtual Funds & Margin Card -->
           <div class="bg-white dark:bg-[#111827] p-4 rounded-2xl border border-gray-200 dark:border-gray-800 shadow-xs flex flex-col justify-between">
             <div class="flex items-center justify-between text-xs text-gray-500 dark:text-gray-400">
-              <span class="font-medium">Available Margin</span>
+              <span class="font-medium">Virtual Wallet Balance</span>
               <span class="text-emerald-600 hover:underline cursor-pointer text-xs font-bold" onclick="openDepositModal()">+ Add Funds</span>
             </div>
             <div class="my-2">
-              <span class="text-2xl font-bold font-mono text-gray-900 dark:text-white">₹${walletInfo.available_margin.toLocaleString('en-IN', {maximumFractionDigits: 0})}</span>
+              <span class="text-2xl font-bold font-mono text-gray-900 dark:text-white">₹${walletInfo.balance.toLocaleString('en-IN', {maximumFractionDigits: 0})}</span>
             </div>
             <div class="flex justify-between text-[11px] font-mono text-gray-500">
+              <span>Avail Margin: <b>₹${walletInfo.available_margin.toLocaleString('en-IN', {maximumFractionDigits: 0})}</b></span>
               <span>Used: <b>₹${walletInfo.used_margin.toLocaleString('en-IN', {maximumFractionDigits: 0})}</b></span>
-              <span>Total: <b>₹${walletInfo.balance.toLocaleString('en-IN', {maximumFractionDigits: 0})}</b></span>
             </div>
           </div>
 
@@ -4070,7 +4098,7 @@
               <span class="bg-white/20 text-white text-[10px] px-2 py-0.5 rounded-full font-mono font-bold">${openPositions.length} Running</span>
             </div>
             <div class="text-[11px] text-blue-100 my-1">
-              Auto 1-Lot entries open on Step 3 Entry. Control your trades below:
+              Auto 1-Lot entries open on Step 3. Square off or manage live:
             </div>
             <div class="grid grid-cols-2 gap-2 mt-2">
               <button onclick="switchMainView('terminal'); openDrawer('orders');" class="bg-emerald-500 hover:bg-emerald-400 text-white text-xs font-bold py-1.5 px-2 rounded-lg shadow-xs transition flex items-center justify-center cursor-pointer">
@@ -4083,8 +4111,8 @@
           </div>
         </div>
 
-        <!-- POSITIONS DESK CONTENT -->
-        <div class="bg-white dark:bg-[#111827] rounded-2xl border border-gray-200 dark:border-gray-800 shadow-xs overflow-hidden flex flex-col">
+        <!-- ACTIVE POSITIONS CONTENT -->
+        <div class="mt-4 bg-white dark:bg-[#111827] rounded-2xl border border-gray-200 dark:border-gray-800 shadow-xs overflow-hidden flex flex-col">
           <div class="p-4 border-b border-gray-100 dark:border-gray-800 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
             <div class="flex items-center space-x-2.5">
               <span class="w-8 h-8 rounded-xl bg-blue-600 text-white flex items-center justify-center font-bold text-sm shadow-xs">
@@ -4111,15 +4139,19 @@
           </div>
 
           ${openPositions.length === 0 ? `
-            <div class="p-12 text-center space-y-3">
+            <div class="p-10 text-center space-y-3">
               <div class="w-14 h-14 mx-auto rounded-2xl bg-blue-50 dark:bg-blue-950/60 text-blue-600 flex items-center justify-center text-2xl shadow-xs">
                 <i class="fa-solid fa-briefcase"></i>
               </div>
-              <h4 class="font-bold text-base text-gray-900 dark:text-white">Abhi Koi Live Trade Running Nahi Hai</h4>
+              <h4 class="font-bold text-base text-gray-900 dark:text-white">
+                ${isMarketClosed ? 'Market Closed • All Intraday Positions Settled' : 'Abhi Koi Live Trade Running Nahi Hai'}
+              </h4>
               <p class="text-xs text-gray-500 max-w-md mx-auto leading-relaxed">
-                Jaise hi Live Strategy Scanner mein <b>Step 3 (Entry Confirmed)</b> trigger hoga, 1-Lot position yahan <b>automatically open</b> ho jayegi! Aap yahan se manual order bhi laga sakte hain.
+                ${isMarketClosed 
+                  ? '3:30 PM par sabhi running intraday positions auto square off ho gayi hain aur final profit/loss virtual wallet balance me credit/debit ho chuka hai. Niche aaj ke settled trades dekhein!' 
+                  : 'Jaise hi Live Strategy Scanner mein <b>Step 3 (Entry Confirmed)</b> trigger hoga, 1-Lot position yahan <b>automatically open</b> ho jayegi!'}
               </p>
-              <div class="pt-2">
+              <div class="pt-1">
                 <button onclick="switchMainView('terminal'); openDrawer('orders');" class="px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white rounded-xl text-xs font-bold shadow-xs transition cursor-pointer">
                   <i class="fa-solid fa-plus mr-1.5"></i> + Place Manual Order
                 </button>
@@ -4219,6 +4251,104 @@
                               <i class="fa-solid fa-chart-line"></i>
                             </button>
                           </div>
+                        </td>
+                      </tr>
+                    `;
+                  }).join('')}
+                </tbody>
+              </table>
+            </div>
+          `}
+        </div>
+
+        <!-- TODAY'S SETTLED TRADES (OFF-MARKET P&L ANALYSIS) -->
+        <div class="mt-4 bg-white dark:bg-[#111827] rounded-2xl border border-gray-200 dark:border-gray-800 shadow-xs overflow-hidden flex flex-col">
+          <div class="p-4 border-b border-gray-100 dark:border-gray-800 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+            <div class="flex items-center space-x-2.5">
+              <span class="w-8 h-8 rounded-xl bg-purple-600 text-white flex items-center justify-center font-bold text-sm shadow-xs">
+                <i class="fa-solid fa-clock-rotate-left"></i>
+              </span>
+              <div>
+                <h3 class="font-bold text-base text-gray-900 dark:text-white flex items-center">
+                  Today's Settled Trades (Off-Market Analysis)
+                  <span class="ml-2 px-2 py-0.5 rounded-full text-[10px] font-mono font-bold ${todayClosedTrades.length > 0 ? 'bg-purple-100 text-purple-800 dark:bg-purple-950 dark:text-purple-300' : 'bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-400'}">
+                    ${todayClosedTrades.length} CLOSED
+                  </span>
+                </h3>
+                <p class="text-xs text-gray-500 dark:text-gray-400">
+                  Sabhi market-close auto exit & manual exit trades ka final settled profit/loss wallet me credit/debit ho chuka hai. 07:15 AM tak analysis ke liye safe hai.
+                </p>
+              </div>
+            </div>
+
+            <div class="flex items-center space-x-2">
+              <span class="text-xs font-mono font-bold px-3 py-1.5 rounded-xl ${todayRealizedPnl >= 0 ? 'bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300' : 'bg-rose-100 text-rose-800 dark:bg-rose-950 dark:text-rose-300'}">
+                Today's Net: ${todayRealizedPnl >= 0 ? '+' : ''}₹${todayRealizedPnl.toFixed(2)}
+              </span>
+            </div>
+          </div>
+
+          ${todayClosedTrades.length === 0 ? `
+            <div class="p-8 text-center text-gray-400 text-xs">
+              <i class="fa-solid fa-receipt text-2xl mb-2 text-gray-300 dark:text-gray-600 block"></i>
+              Aaj koi trade close ya settle nahi hua hai. Step 3 trigger hone par trades execute honge aur market close (03:30 PM) par auto-settle ho jayenge.
+            </div>
+          ` : `
+            <div class="overflow-x-auto">
+              <table class="w-full text-left text-xs font-sans">
+                <thead class="bg-gray-50/80 dark:bg-gray-800/60 border-b border-gray-200 dark:border-gray-800 text-[11px] font-semibold text-gray-500 dark:text-gray-400 sticky top-0 z-10 backdrop-blur-xs">
+                  <tr>
+                    <th class="py-3 px-3.5">#</th>
+                    <th class="py-3 px-3.5">Stock</th>
+                    <th class="py-3 px-3.5">Side</th>
+                    <th class="py-3 px-3.5">Qty</th>
+                    <th class="py-3 px-3.5 text-right">Entry</th>
+                    <th class="py-3 px-3.5 text-right">Exit</th>
+                    <th class="py-3 px-3.5 text-right">Settled P&L</th>
+                    <th class="py-3 px-3.5 text-left">Exit Reason</th>
+                    <th class="py-3 px-3.5 text-right">Times</th>
+                    <th class="py-3 px-3.5 text-center">Chart</th>
+                  </tr>
+                </thead>
+                <tbody class="divide-y divide-gray-100 dark:divide-gray-800/80 font-mono">
+                  ${todayClosedTrades.map((t, idx) => {
+                    const isProfit = Number(t.pnl) >= 0;
+                    const isSell = t.side === "SELL";
+                    const color = getAvatarColor(t.symbol);
+                    return `
+                      <tr class="hover:bg-blue-50/30 dark:hover:bg-blue-950/20 transition">
+                        <td class="py-2.5 px-3.5 font-bold text-gray-400">${idx + 1}</td>
+                        <td class="py-2.5 px-3.5">
+                          <div class="flex items-center space-x-2">
+                            <div class="w-7 h-7 rounded-lg flex items-center justify-center font-bold text-xs shrink-0" style="background-color: ${color.bg}; color: ${color.text};">
+                              ${t.symbol.substring(0, 2)}
+                            </div>
+                            <span class="font-bold text-gray-900 dark:text-white font-sans">${t.symbol}</span>
+                          </div>
+                        </td>
+                        <td class="py-2.5 px-3.5">
+                          <span class="px-2 py-0.5 rounded text-[10px] font-bold ${isSell ? 'bg-rose-100 text-rose-700 dark:bg-rose-950 dark:text-rose-300' : 'bg-emerald-100 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300'}">
+                            ${isSell ? '🔴 SELL' : '🟢 BUY'}
+                          </span>
+                        </td>
+                        <td class="py-2.5 px-3.5 text-gray-700 dark:text-gray-300"><b>${t.qty}</b></td>
+                        <td class="py-2.5 px-3.5 text-right">₹${Number(t.entry_price).toFixed(2)}</td>
+                        <td class="py-2.5 px-3.5 text-right font-bold">₹${Number(t.exit_price).toFixed(2)}</td>
+                        <td class="py-2.5 px-3.5 text-right font-bold ${isProfit ? 'text-emerald-600 dark:text-emerald-400' : 'text-rose-600 dark:text-rose-400'}">
+                          ${isProfit ? '+' : ''}₹${Number(t.pnl).toFixed(2)}
+                          <span class="text-[10px] block font-semibold">${isProfit ? '+' : ''}${Number(t.pnl_pct || 0).toFixed(2)}%</span>
+                        </td>
+                        <td class="py-2.5 px-3.5 font-sans">
+                          <span class="text-[11px] text-gray-600 dark:text-gray-300 font-medium">${t.exit_reason || 'Auto Exit'}</span>
+                        </td>
+                        <td class="py-2.5 px-3.5 text-right text-[10px] text-gray-400">
+                          <div>In: ${t.entry_time || '--:--'}</div>
+                          <div>Out: ${t.exit_time || '--:--'}</div>
+                        </td>
+                        <td class="py-2.5 px-3.5 text-center">
+                          <button onclick="openStockInTerminal('${t.symbol}')" class="px-2 py-1 rounded-lg bg-gray-100 dark:bg-gray-800 hover:bg-blue-600 hover:text-white text-gray-700 dark:text-gray-300 text-xs transition cursor-pointer" title="Open Chart">
+                            <i class="fa-solid fa-chart-line"></i>
+                          </button>
                         </td>
                       </tr>
                     `;
@@ -4831,10 +4961,10 @@
             </span>
             <div>
               <div class="flex items-center space-x-1.5">
-                <b class="text-gray-900 dark:text-white font-bold">🌅 05:00 AM Reset</b>
+                <b class="text-gray-900 dark:text-white font-bold">🌅 07:15 AM Reset</b>
                 <span class="px-1.5 py-0.2 rounded bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300 text-[9px] font-bold font-mono">ACTIVE</span>
               </div>
-              <div class="text-[10px] text-gray-500 dark:text-gray-400">Har subah 5 AM alerts auto-archive ho jate hain.</div>
+              <div class="text-[10px] text-gray-500 dark:text-gray-400">Market khulne se 2h pehle (07:15 AM) auto-reset. Raat ko off-market analysis ke liye alerts safe rehte hain.</div>
             </div>
           </div>
           <button onclick="clearRadarManual()" class="px-2 py-1 rounded-lg bg-rose-50 dark:bg-rose-950/40 hover:bg-rose-100 dark:hover:bg-rose-900/60 text-rose-700 dark:text-rose-300 font-bold text-[10px] border border-rose-200 dark:border-rose-800 transition flex items-center shrink-0 cursor-pointer active:scale-95 shadow-xs" title="Clear Radar & Archive Alerts Now">

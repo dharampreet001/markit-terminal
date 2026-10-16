@@ -927,17 +927,20 @@ def get_sector_chart_data(sector_id: str, timeframe: str = "5m", nocache: bool =
     return res
 
 # ======================================================================================
-# 05:00 AM IST MORNING RADAR RESET ENGINE & ARCHIVE
+# ======================================================================================
+# 07:15 AM IST MORNING RADAR RESET ENGINE & ARCHIVE (2 HOURS BEFORE MARKET OPEN)
 # ======================================================================================
 RADAR_META_FILE = os.path.join(os.path.dirname(__file__), "radar_meta.json")
 RADAR_ARCHIVE_DIR = os.path.join(os.path.dirname(__file__), "radar_archive")
+EOD_SETTLEMENT_META_FILE = os.path.join(os.path.dirname(__file__), "eod_settlement_meta.json")
 
 def check_and_perform_daily_radar_reset(force_clear: bool = False) -> Dict[str, Any]:
     """
-    Morning 05:00 AM IST Automatic Daily Radar Reset:
+    Morning 07:15 AM IST Automatic Daily Radar Reset (Exactly 2 hours before 09:15 AM Market Open):
     Clears all yesterday's radar alerts so fresh signals for the new trading day can be added.
     Preserves and archives previous alerts so history is never lost.
     Also resets dismissed symbols so all 154 stocks can be evaluated fresh.
+    Alerts remain intact and visible all night until 07:15 AM for off-market trade analysis.
     """
     now_ist = datetime.now(IST)
     today_str = now_ist.strftime('%Y-%m-%d')
@@ -955,8 +958,9 @@ def check_and_perform_daily_radar_reset(force_clear: bool = False) -> Dict[str, 
 
     # Trigger if:
     # 1. User requested a manual force clear, OR
-    # 2. It is 05:00 AM IST or later (hour >= 5) and today's date hasn't been reset yet.
-    should_clear = force_clear or (now_ist.hour >= 5 and last_cleared_date != today_str)
+    # 2. It is 07:15 AM IST or later (2 hours before 09:15 AM Market Open) and today's date hasn't been reset yet.
+    is_reset_time = (now_ist.hour > 7) or (now_ist.hour == 7 and now_ist.minute >= 15)
+    should_clear = force_clear or (is_reset_time and last_cleared_date != today_str)
 
     if should_clear:
         live_alerts_file = os.path.join(os.path.dirname(__file__), "live_alerts.json")
@@ -1025,19 +1029,88 @@ def check_and_perform_daily_radar_reset(force_clear: bool = False) -> Dict[str, 
         except Exception:
             pass
 
-        print(f"[RADAR RESET] Morning 05:00 AM Reset Complete! Cleared for new trading day {today_str}.")
+        print(f"[RADAR RESET] Morning 07:15 AM Reset Complete! Cleared for new trading day {today_str}.")
         return {"status": "SUCCESS", "cleared": True, "archived_count": archived_count, "archived_verified_count": archived_verified_count, "date": today_str}
 
     return {"status": "SUCCESS", "cleared": False, "date": today_str, "last_cleared": last_cleared_date}
 
+def check_and_perform_eod_squareoff(force: bool = False) -> Dict[str, Any]:
+    """
+    EOD Market Close (03:30 PM IST) P&L Settlement Engine:
+    Squares off any remaining open paper positions at 03:30 PM market close.
+    Directly credits or debits net profit/loss into the virtual wallet balance,
+    releases used margin, and saves the trade in trades table with exit_reason='Auto Market Close (03:30 PM)'.
+    Radar alerts and closed trade records are preserved all night for user off-market analysis.
+    """
+    now_ist = datetime.now(IST)
+    today_str = now_ist.strftime('%Y-%m-%d')
+    h = now_ist.hour
+    m = now_ist.minute
+
+    meta = {}
+    if os.path.exists(EOD_SETTLEMENT_META_FILE):
+        try:
+            with open(EOD_SETTLEMENT_META_FILE, 'r', encoding='utf-8') as f:
+                meta = json.load(f)
+        except Exception:
+            pass
+
+    last_settled_date = meta.get("last_settled_date", "")
+    is_after_market_close = (h > 15) or (h == 15 and m >= 30)
+    should_settle = force or (is_after_market_close and last_settled_date != today_str)
+
+    if not should_settle:
+        return {"status": "SUCCESS", "settled": False, "date": today_str, "last_settled": last_settled_date}
+
+    open_positions = db.get_open_positions()
+    settled_results = []
+    
+    if open_positions:
+        ltp_dict = {}
+        for p in open_positions:
+            sym = p["symbol"]
+            metric_price = STOCK_METRICS.get(sym, {}).get("price", 0.0)
+            if metric_price > 0:
+                ltp_dict[sym] = metric_price
+            else:
+                df = get_stock_candles(sym, period="5d", interval="5m")
+                if df is not None and not df.empty:
+                    ltp_dict[sym] = round(float(df.iloc[-1]["Close"]), 2)
+                else:
+                    ltp_dict[sym] = float(p["entry_price"])
+
+        settled_results = db.square_off_all_positions(exit_reason="Auto Market Close (03:30 PM)", ltp_dict=ltp_dict)
+        print(f"[EOD SETTLEMENT] Automatically squared off {len(settled_results)} open positions at 03:30 PM! P&L settled to virtual wallet.")
+
+    meta = {
+        "last_settled_date": today_str,
+        "last_settled_at": now_ist.isoformat(),
+        "settled_count": len(settled_results),
+        "status": "SETTLED_AT_MARKET_CLOSE"
+    }
+    try:
+        with open(EOD_SETTLEMENT_META_FILE, 'w', encoding='utf-8') as f:
+            json.dump(meta, f, indent=2)
+    except Exception:
+        pass
+
+    return {
+        "status": "SUCCESS",
+        "settled": True,
+        "count": len(settled_results),
+        "results": settled_results,
+        "date": today_str
+    }
+
 @app.on_event("startup")
 async def startup_radar_manager():
-    """Initializes 05:00 AM Morning Reset checker, background monitor, and optional cloud scanner."""
+    """Initializes 07:15 AM Morning Reset checker, 03:30 PM EOD Squareoff checker, background monitor, and optional cloud scanner."""
     try:
         check_and_perform_daily_radar_reset()
+        check_and_perform_eod_squareoff()
     except Exception as e:
-        print(f"[STARTUP RADAR CHECK ERR] {e}")
-    asyncio.create_task(radar_morning_worker())
+        print(f"[STARTUP CHECK ERR] {e}")
+    asyncio.create_task(daily_schedule_worker())
 
     # On cloud platforms (Render, Koyeb) or if RUN_SCANNER_IN_BACKGROUND=true, automatically launch live scanner
     should_run_scanner = os.environ.get("RUN_SCANNER_IN_BACKGROUND", "false").lower() in ("true", "1", "yes") or bool(os.environ.get("RENDER")) or bool(os.environ.get("KOYEB"))
@@ -1053,14 +1126,20 @@ async def startup_radar_manager():
                     print(f"[CLOUD SCANNER ERROR] {ex}")
             threading.Thread(target=_launch_scanner, daemon=True).start()
 
-async def radar_morning_worker():
-    """Background worker that continuously monitors for 05:00 AM IST to clear old day's radar alerts."""
+async def daily_schedule_worker():
+    """Background worker that continuously monitors for 07:15 AM IST (Radar Reset) and 03:30 PM IST (EOD Auto Squareoff)."""
     while True:
         try:
             check_and_perform_daily_radar_reset()
+            check_and_perform_eod_squareoff()
         except Exception as e:
-            print(f"[RADAR WORKER ERR] {e}")
+            print(f"[DAILY SCHEDULE WORKER ERR] {e}")
         await asyncio.sleep(60)
+
+async def radar_morning_worker():
+    """Backward compatibility alias for daily_schedule_worker."""
+    await daily_schedule_worker()
+
 
 @app.get("/api/radar")
 def get_radar_signals():
@@ -1146,7 +1225,7 @@ def get_radar_signals():
         },
         "alerts": filtered_alerts,
         "cancelled_alerts": cancelled_alerts,
-        "auto_reset_schedule": "Daily at 05:00 AM IST"
+        "auto_reset_schedule": "Daily at 07:15 AM IST (2h before Market Open)"
     }
 
 @app.post("/api/radar/clear")
@@ -1350,7 +1429,37 @@ def get_positions():
             "entry_time": pos["entry_time"]
         })
         
-    return {"status": "SUCCESS", "count": len(results), "positions": results}
+    now_ist = datetime.now(IST)
+    is_market_closed = (now_ist.hour > 15) or (now_ist.hour == 15 and now_ist.minute >= 30)
+    today_closed = db.get_today_closed_trades()
+    today_realized_pnl = round(sum(t.get("pnl", 0.0) for t in today_closed), 2)
+
+    return {
+        "status": "SUCCESS",
+        "count": len(results),
+        "positions": results,
+        "today_closed_trades": today_closed,
+        "today_realized_pnl": today_realized_pnl,
+        "is_market_closed": is_market_closed,
+        "next_reset_schedule": "07:15 AM IST (2h before Market Open)"
+    }
+
+@app.post("/api/positions/square_off_all")
+def square_off_all():
+    """Manually square off all open positions and credit/debit P&L to virtual wallet."""
+    return check_and_perform_eod_squareoff(force=True)
+
+@app.get("/api/positions/today_trades")
+def get_today_trades():
+    """Returns today's closed trades for off-market analysis."""
+    trades = db.get_today_closed_trades()
+    total_pnl = round(sum(t.get("pnl", 0.0) for t in trades), 2)
+    return {
+        "status": "SUCCESS",
+        "count": len(trades),
+        "total_pnl": total_pnl,
+        "trades": trades
+    }
 
 @app.get("/api/reports")
 def get_reports(period: str = Query("ALL", pattern="^(DAILY|WEEKLY|MONTHLY|YEARLY|ALL)$")):
@@ -1361,3 +1470,4 @@ if __name__ == "__main__":
     import uvicorn
     port = int(os.environ.get("PORT", 8000))
     uvicorn.run("server:app", host="0.0.0.0", port=port, reload=False)
+

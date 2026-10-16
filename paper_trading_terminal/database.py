@@ -266,6 +266,35 @@ def update_position_sl(position_id: int, new_sl: float) -> Dict[str, Any]:
     conn.close()
     return {"status": "SUCCESS", "new_sl": new_sl}
 
+def get_today_closed_trades() -> List[Dict[str, Any]]:
+    """Returns all trades closed today with P&L and exit details."""
+    conn = get_connection()
+    today_str = datetime.now().strftime("%Y-%m-%d")
+    rows = conn.execute("SELECT * FROM trades WHERE trade_date = ? ORDER BY id DESC", (today_str,)).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+def square_off_all_positions(exit_reason: str = "Auto Market Close (03:30 PM)", ltp_dict: Optional[Dict[str, float]] = None) -> List[Dict[str, Any]]:
+    """
+    Squares off all currently open positions, releasing margin and crediting/debiting
+    net P&L directly into the virtual wallet balance and realized P&L.
+    """
+    open_pos = get_open_positions()
+    closed = []
+    for pos in open_pos:
+        sym = pos["symbol"]
+        pos_id = pos["id"]
+        exit_price = float(pos["entry_price"])
+        if ltp_dict and sym in ltp_dict and float(ltp_dict[sym]) > 0:
+            exit_price = float(ltp_dict[sym])
+        try:
+            res = close_position_partial(position_id=pos_id, exit_price=exit_price, pct_to_close=100.0, exit_reason=exit_reason)
+            closed.append(res)
+        except Exception as e:
+            print(f"[SQUARE OFF ERR {sym}] {e}")
+    return closed
+
+
 # --------------------------------------------------------------------------------------
 # REPORTS & ANALYTICS FUNCTIONS
 # --------------------------------------------------------------------------------------
