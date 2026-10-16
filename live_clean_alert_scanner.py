@@ -496,6 +496,10 @@ def run_live_scanner():
                             tracker.macro_tag = bull_macro_tag
                             tracker.bear_macro_tag = bear_macro_tag
 
+                            first_c = df_t.iloc[0]
+                            first_c_high = float(first_c['High'])
+                            first_c_low = float(first_c['Low'])
+
                             for idx in range(1, len(df_t)):
                                 c = df_t.iloc[idx]
                                 prev_c = df_t.iloc[idx-1]
@@ -512,245 +516,228 @@ def run_live_scanner():
                                 c_vol = float(c.get('Volume', 0))
                                 
                                 # USER RULE: Trades allowed from morning up to maximum 12:00 PM sharp.
-                                # All trades after 12:00 PM are avoided (separate strategy will be created for afternoon).
                                 if h_bar > 12 or (h_bar == 12 and m_bar > 0):
                                     break
                                     
                                 time_fmt = f"{c.name.hour}:{c.name.minute:02d}"
 
                                 # =========================================================
-                                # 🟢 BULLISH SETUP (CLEAN PDH BREAKOUT + RISING 9 EMA RETEST)
+                                # 🟢 BULLISH SETUP (CLEAN PDH BREAKOUT + 9 EMA PULLBACK + TDH WICK CROSS)
                                 # =========================================================
                                 if can_trade_bull:
                                     ema_rising = c_ema9 >= prev_ema9 * 0.9995
 
-                                    # Tier 3: Breakout / Clean PDH Strict Cross (No buffer triggers below PDH)
-                                    if tracker.state == 'IDLE':
-                                        prior_high = float(df_t.iloc[:idx]['High'].max())
-                                        if c_high > tracker.pdh and c_high > prior_high:
-                                            tracker.state = 'BREAKOUT'
-                                            tracker.breakout_time = c.name
-                                            tracker.swing_high = c_high
-                                            tracker.swing_high_idx = idx
-                                            tracker.pullback_low = c_low
-                                            tracker.msg1_sent = True
-                                            
-                                            alert1_text = f"🟡 {sym} → {time_fmt} Pulback Start🚨"
-                                            print(f"🔔 [SENDING TELEGRAM] {alert1_text}")
-                                            try:
-                                                bot.send_message(CHAT_ID, alert1_text)
-                                            except Exception as err:
-                                                print(f"[TG ERROR] {err}")
+                                    # Master Boundary Filter: Price must stay above First Candle Low!
+                                    if c_low < first_c_low:
+                                        tracker.state = 'INVALID'
 
-                                            risk_pts = max(0.10, tracker.swing_high - tracker.pullback_low)
-                                            record_live_alert(
-                                                sym=sym, stage=1, badge="🟡 Breakout Alert 🚨",
-                                                breakout_time=time_fmt, pullback_time="--:--", entry_time="--:--",
-                                                clean_pdh=tracker.pdh, entry_price=tracker.swing_high, sl_price=tracker.pullback_low,
-                                                t1=round(tracker.swing_high + 2.0 * risk_pts, 2),
-                                                t2=round(tracker.swing_high + 4.0 * risk_pts, 2),
-                                                risk_pct=round((risk_pts / tracker.swing_high) * 100.0, 2),
-                                                direction="LONG"
-                                            )
+                                    if tracker.state != 'INVALID':
+                                        # Step 1: Clean PDH Breakout (No Telegram Alert, only list addition)
+                                        if tracker.state == 'IDLE':
+                                            prior_high = float(df_t.iloc[:idx]['High'].max())
+                                            if c_high > tracker.pdh and c_high > prior_high:
+                                                tracker.state = 'BREAKOUT'
+                                                tracker.breakout_time = c.name
+                                                tracker.swing_high = c_high  # Extreme wick high (TDH)
+                                                tracker.swing_high_idx = idx
+                                                tracker.pullback_low = c_low
+                                                tracker.msg1_sent = True
+                                                
+                                                print(f"📋 [STAGE 1 LIST ONLY] {sym} → {time_fmt} PDH Breakout Watch (TDH Wick: ₹{tracker.swing_high:.2f})")
+                                                risk_pts = max(0.10, tracker.swing_high - tracker.pullback_low)
+                                                record_live_alert(
+                                                    sym=sym, stage=1, badge="🟡 PDH Break",
+                                                    breakout_time=time_fmt, pullback_time="--:--", entry_time="--:--",
+                                                    clean_pdh=tracker.pdh, entry_price=tracker.swing_high, sl_price=tracker.pullback_low,
+                                                    t1=round(tracker.swing_high + 2.0 * risk_pts, 2),
+                                                    t2=round(tracker.swing_high + 4.0 * risk_pts, 2),
+                                                    risk_pct=round((risk_pts / tracker.swing_high) * 100.0, 2),
+                                                    direction="LONG"
+                                                )
 
-                                    # Tier 4: Pullback to Rising 9 EMA & Green Candle Close Above 9 EMA
-                                    elif tracker.state == 'BREAKOUT' and not tracker.msg3_sent:
-                                        if tracker.breakout_time is not None and c.name > tracker.breakout_time:
-                                            if c.name not in tracker.evaluated_candles:
-                                                tracker.evaluated_candles.add(c.name)
-                                                if c_high > tracker.swing_high and c_close >= c_open:
-                                                    tracker.swing_high = c_high
-                                                    tracker.swing_high_idx = idx
-                                                elif c_low <= c_ema9 * 1.003:
-                                                    tracker.pullback_low = min(tracker.pullback_low, c_low)
-                                                    # USER RULE 2: Pullback ke baad 9 EMA ke upar strong green candle close hote hi pullback alert
-                                                    if c_close > c_open and c_close >= c_ema9 and ema_rising:
-                                                        tracker.state = 'PULLBACK_CONFIRMED'
-                                                        tracker.msg2_sent = True
-                                                        print(f"⏳ [STAGE 2 INTERNAL] {sym} → {time_fmt} 9 EMA Pullback Confirmed (Waiting for Swing High Break)")
+                                        # Step 2: 9 EMA Pullback Dip + Green Reversal Candle Close
+                                        elif tracker.state == 'BREAKOUT' and not tracker.msg3_sent:
+                                            if tracker.breakout_time is not None and c.name > tracker.breakout_time:
+                                                if c.name not in tracker.evaluated_candles:
+                                                    tracker.evaluated_candles.add(c.name)
+                                                    # Keep track of highest wick before pullback
+                                                    if c_high > tracker.swing_high:
+                                                        tracker.swing_high = c_high
+                                                        tracker.swing_high_idx = idx
+                                                    elif c_low <= c_ema9 * 1.003:
+                                                        tracker.pullback_low = min(tracker.pullback_low, c_low)
+                                                        # Green reversal candle close above 9 EMA
+                                                        if c_close > c_open and c_close >= c_ema9 and ema_rising:
+                                                            tracker.state = 'PULLBACK_CONFIRMED'
+                                                            tracker.msg2_sent = True
+                                                            tracker.pullback_time = c.name
+                                                            
+                                                            alert2_text = f"🟡 {sym} → {time_fmt} 9 EMA Pulback Confirmed ⏳"
+                                                            print(f"⏳ [SENDING TELEGRAM] {alert2_text}")
+                                                            try:
+                                                                bot.send_message(CHAT_ID, alert2_text)
+                                                            except Exception as err:
+                                                                print(f"[TG ERROR] {err}")
 
-                                                        risk_pts = max(0.10, tracker.swing_high - tracker.pullback_low)
+                                                            risk_pts = max(0.10, tracker.swing_high - tracker.pullback_low)
+                                                            record_live_alert(
+                                                                sym=sym, stage=2, badge="⏳ 9 EMA Pulback",
+                                                                breakout_time=tracker.breakout_time.strftime('%H:%M') if tracker.breakout_time else time_fmt,
+                                                                pullback_time=time_fmt, entry_time="--:--",
+                                                                clean_pdh=tracker.pdh, entry_price=tracker.swing_high, sl_price=prev_c['Low'],
+                                                                t1=round(tracker.swing_high + 2.0 * risk_pts, 2),
+                                                                t2=round(tracker.swing_high + 4.0 * risk_pts, 2),
+                                                                risk_pct=round((risk_pts / tracker.swing_high) * 100.0, 2),
+                                                                direction="LONG"
+                                                            )
+
+                                        # Step 3: TDH Extreme Wick Breakout -> Long Entry Confirmed!
+                                        elif tracker.state == 'PULLBACK_CONFIRMED' and not tracker.msg3_sent:
+                                            if tracker.breakout_time is not None and c.name > tracker.breakout_time:
+                                                if c.name not in tracker.evaluated_candles:
+                                                    tracker.evaluated_candles.add(c.name)
+                                                    # Entry triggers ONLY when price crosses above the extreme WICK of TDH!
+                                                    if c_high > tracker.swing_high:
+                                                        tracker.state = 'CONFIRMED'
+                                                        tracker.msg3_sent = True
+                                                        
+                                                        entry_price = round(max(c_open, tracker.swing_high + 0.05), 2)
+                                                        # SL on Previous Candle Low
+                                                        prev_low = float(prev_c['Low'])
+                                                        sl_price = round(prev_low, 2)
+                                                        if sl_price >= entry_price:
+                                                            sl_price = round(min(prev_low, entry_price * (1.0 - 0.003)), 2)
+                                                            
+                                                        risk_pts = max(0.10, round(entry_price - sl_price, 2))
+                                                        risk_pct = round((risk_pts / entry_price) * 100.0, 2)
+                                                        t1 = round(entry_price + 2.0 * risk_pts, 2)
+                                                        t2 = round(entry_price + 4.0 * risk_pts, 2)
+                                                        
+                                                        alert3_text = f"🟢 {sym} → {time_fmt} Trade Setup Active ✅"
+                                                        print(f"🎯 [SENDING TELEGRAM] {alert3_text}")
+                                                        try:
+                                                            bot.send_message(CHAT_ID, alert3_text)
+                                                        except Exception as err:
+                                                            print(f"[TG ERROR] {err}")
+
                                                         record_live_alert(
-                                                            sym=sym, stage=2, badge="⏳ 9 EMA Retest Ready",
+                                                            sym=sym, stage=3, badge="🟢 Entry Confirmed ✅",
                                                             breakout_time=tracker.breakout_time.strftime('%H:%M') if tracker.breakout_time else time_fmt,
-                                                            pullback_time=time_fmt, entry_time="--:--",
-                                                            clean_pdh=tracker.pdh, entry_price=tracker.swing_high, sl_price=prev_c['Low'],
-                                                            t1=round(tracker.swing_high + 2.0 * risk_pts, 2),
-                                                            t2=round(tracker.swing_high + 3.0 * risk_pts, 2),
-                                                            risk_pct=round((risk_pts / tracker.swing_high) * 100.0, 2),
+                                                            pullback_time=tracker.pullback_time.strftime('%H:%M') if tracker.pullback_time else time_fmt,
+                                                            entry_time=time_fmt,
+                                                            clean_pdh=tracker.pdh, entry_price=entry_price, sl_price=sl_price,
+                                                            t1=t1, t2=t2, risk_pct=risk_pct,
                                                             direction="LONG"
                                                         )
 
-                                    # Tier 4: Swing High Breakout Entry Confirmation
-                                    elif tracker.state == 'PULLBACK_CONFIRMED' and not tracker.msg3_sent:
-                                        if tracker.breakout_time is not None and c.name > tracker.breakout_time:
-                                            if c.name not in tracker.evaluated_candles:
-                                                tracker.evaluated_candles.add(c.name)
-                                                # USER RULE 3: Swing High break karke aage nikalte hi Entry Confirmed!
-                                                if c_high >= tracker.swing_high:
-                                                    tracker.state = 'CONFIRMED'
-                                                    tracker.msg3_sent = True
-                                                    
-                                                    entry_price = round(max(c_open, tracker.swing_high + max(0.10, tracker.swing_high * 0.0005)), 2)
-                                                    
-                                                    # USER RULE 4: Entry candle se theek pichhli candle (prev_c) ka Low pr SL
-                                                    prev_low = float(prev_c['Low'])
-                                                    sl_price = round(prev_low, 2)
-                                                    if sl_price >= entry_price:
-                                                        sl_price = round(min(prev_low, entry_price * (1.0 - 0.004)), 2)
-                                                        
-                                                    risk_pts = max(0.10, round(entry_price - sl_price, 2))
-                                                    risk_pct = round((risk_pts / entry_price) * 100.0, 2)
-                                                    t1 = round(entry_price + 2.0 * risk_pts, 2)
-                                                    t2 = round(entry_price + 3.0 * risk_pts, 2)
-                                                    
-                                                    n_c = nifty_info.get('close', 0)
-                                                    n_e = nifty_info.get('ema9', 0)
-                                                    n_stat = "9 EMA ke Upar 🟢" if n_c >= n_e else "9 EMA ke Niche ⚠️"
-                                                    
-                                                    b_c = banknifty_info.get('close', 0)
-                                                    b_e = banknifty_info.get('ema9', 0)
-                                                    b_stat = "9 EMA ke Upar 🟢" if b_c >= b_e else "9 EMA ke Niche ⚠️"
-                                                    
-                                                    s_c = sec_info.get('close', 0)
-                                                    s_e = sec_info.get('ema9', 0)
-                                                    sec_stat = "9 EMA ke Upar 🟢" if s_c >= s_e else "9 EMA ke Niche ⚠️"
-                                                    
-                                                    stk_stat = "9 EMA ke Upar 🟢" if c_close >= c_ema9 else "9 EMA ke Niche ⚠️"
-                                                    
-                                                    alert3_text = f"🟢 {sym} → {time_fmt} Trade Setup Active ✅"
-                                                    print(f"🎯 [SENDING TELEGRAM] {alert3_text}")
-                                                    try:
-                                                        bot.send_message(CHAT_ID, alert3_text)
-                                                    except Exception as err:
-                                                        print(f"[TG ERROR] {err}")
-
-                                                    record_live_alert(
-                                                        sym=sym, stage=3, badge="🟢 Entry Confirmed ✅",
-                                                        breakout_time=tracker.breakout_time.strftime('%H:%M') if tracker.breakout_time else time_fmt,
-                                                        pullback_time=time_fmt, entry_time=time_fmt,
-                                                        clean_pdh=tracker.pdh, entry_price=entry_price, sl_price=sl_price,
-                                                        t1=t1, t2=t2, risk_pct=risk_pct,
-                                                        direction="LONG"
-                                                    )
-                                                elif c_close < c_ema9 * 0.985:
-                                                    tracker.state = 'IDLE'
-
                                 # =========================================================
-                                # 🔴 BEARISH SETUP (CLEAN PDL BREAKDOWN + FALLING 9 EMA RETEST)
+                                # 🔴 BEARISH SETUP (CLEAN PDL BREAKDOWN + 9 EMA PULLBACK + TDL WICK CROSS)
                                 # =========================================================
                                 if can_trade_bear:
                                     ema_falling = c_ema9 <= prev_ema9 * 1.0005
 
-                                    # Tier 3: Breakdown / Clean PDL Strict Cross (No buffer triggers above PDL)
-                                    if tracker.bear_state == 'IDLE':
-                                        prior_low = float(df_t.iloc[:idx]['Low'].min())
-                                        if c_low < tracker.pdl and c_low < prior_low:
-                                            tracker.bear_state = 'BREAKDOWN'
-                                            tracker.bear_breakdown_time = c.name
-                                            tracker.swing_low = c_low
-                                            tracker.swing_low_idx = idx
-                                            tracker.pullback_high = c_high
-                                            tracker.bear_msg1_sent = True
+                                    # Master Boundary Filter: Price must stay below First Candle High!
+                                    if c_high > first_c_high:
+                                        tracker.bear_state = 'INVALID'
 
-                                            alert1_bear = f"🟡 {sym} → {time_fmt} Pulback Start🚨"
-                                            print(f"🔔 [SENDING TELEGRAM] {alert1_bear}")
-                                            try:
-                                                bot.send_message(CHAT_ID, alert1_bear)
-                                            except Exception as err:
-                                                print(f"[TG ERROR] {err}")
+                                    if tracker.bear_state != 'INVALID':
+                                        # Step 1: Clean PDL Breakdown (No Telegram Alert, only list addition)
+                                        if tracker.bear_state == 'IDLE':
+                                            prior_low = float(df_t.iloc[:idx]['Low'].min())
+                                            if c_low < tracker.pdl and c_low < prior_low:
+                                                tracker.bear_state = 'BREAKDOWN'
+                                                tracker.bear_breakdown_time = c.name
+                                                tracker.swing_low = c_low  # Extreme wick low (TDL)
+                                                tracker.swing_low_idx = idx
+                                                tracker.pullback_high = c_high
+                                                tracker.bear_msg1_sent = True
 
-                                            risk_pts = max(0.10, tracker.pullback_high - tracker.swing_low)
-                                            record_live_alert(
-                                                sym=sym, stage=1, badge="🔴 Breakdown Alert 🚨",
-                                                breakout_time=time_fmt, pullback_time="--:--", entry_time="--:--",
-                                                clean_pdh=tracker.pdl, entry_price=tracker.swing_low, sl_price=tracker.pullback_high,
-                                                t1=round(tracker.swing_low - 2.0 * risk_pts, 2),
-                                                t2=round(tracker.swing_low - 4.0 * risk_pts, 2),
-                                                risk_pct=round((risk_pts / tracker.swing_low) * 100.0, 2),
-                                                direction="SHORT"
-                                            )
+                                                print(f"📋 [STAGE 1 LIST ONLY] {sym} → {time_fmt} PDL Breakdown Watch (TDL Wick: ₹{tracker.swing_low:.2f})")
+                                                risk_pts = max(0.10, tracker.pullback_high - tracker.swing_low)
+                                                record_live_alert(
+                                                    sym=sym, stage=1, badge="🔴 PDL Break",
+                                                    breakout_time=time_fmt, pullback_time="--:--", entry_time="--:--",
+                                                    clean_pdh=tracker.pdl, entry_price=tracker.swing_low, sl_price=tracker.pullback_high,
+                                                    t1=round(tracker.swing_low - 2.0 * risk_pts, 2),
+                                                    t2=round(tracker.swing_low - 4.0 * risk_pts, 2),
+                                                    risk_pct=round((risk_pts / tracker.swing_low) * 100.0, 2),
+                                                    direction="SHORT"
+                                                )
 
-                                    # Tier 4: Bounce to Falling 9 EMA & Red Candle Close Below 9 EMA
-                                    elif tracker.bear_state == 'BREAKDOWN' and not tracker.bear_msg3_sent:
-                                        if tracker.bear_breakdown_time is not None and c.name > tracker.bear_breakdown_time:
-                                            if c.name not in tracker.bear_evaluated_candles:
-                                                tracker.bear_evaluated_candles.add(c.name)
-                                                if c_low < tracker.swing_low and c_close <= c_open:
-                                                    tracker.swing_low = c_low
-                                                    tracker.swing_low_idx = idx
-                                                elif c_high >= c_ema9 * 0.997:
-                                                    tracker.pullback_high = max(tracker.pullback_high, c_high)
-                                                    # USER RULE 2: Pullback ke baad 9 EMA ke niche strong red candle close hote hi pullback alert
-                                                    if c_close < c_open and c_close <= c_ema9 and ema_falling:
-                                                        tracker.bear_state = 'BEAR_PULLBACK_CONFIRMED'
-                                                        tracker.bear_msg2_sent = True
-                                                        print(f"⏳ [STAGE 2 INTERNAL] {sym} → {time_fmt} 9 EMA Resistance Retest Confirmed (Waiting for Swing Low Breakdown)")
+                                        # Step 2: 9 EMA Pullback Bounce + Red Reversal Candle Close
+                                        elif tracker.bear_state == 'BREAKDOWN' and not tracker.bear_msg3_sent:
+                                            if tracker.bear_breakdown_time is not None and c.name > tracker.bear_breakdown_time:
+                                                if c.name not in tracker.bear_evaluated_candles:
+                                                    tracker.bear_evaluated_candles.add(c.name)
+                                                    # Keep track of lowest wick before pullback
+                                                    if c_low < tracker.swing_low:
+                                                        tracker.swing_low = c_low
+                                                        tracker.swing_low_idx = idx
+                                                    elif c_high >= c_ema9 * 0.997:
+                                                        tracker.pullback_high = max(tracker.pullback_high, c_high)
+                                                        # Red reversal candle close below 9 EMA
+                                                        if c_close < c_open and c_close <= c_ema9 and ema_falling:
+                                                            tracker.bear_state = 'BEAR_PULLBACK_CONFIRMED'
+                                                            tracker.bear_msg2_sent = True
+                                                            tracker.bear_pullback_time = c.name
+                                                            
+                                                            alert2_bear = f"🟡 {sym} → {time_fmt} 9 EMA Pulback Confirmed ⏳"
+                                                            print(f"⏳ [SENDING TELEGRAM] {alert2_bear}")
+                                                            try:
+                                                                bot.send_message(CHAT_ID, alert2_bear)
+                                                            except Exception as err:
+                                                                print(f"[TG ERROR] {err}")
 
-                                                        risk_pts = max(0.10, tracker.pullback_high - tracker.swing_low)
+                                                            risk_pts = max(0.10, tracker.pullback_high - tracker.swing_low)
+                                                            record_live_alert(
+                                                                sym=sym, stage=2, badge="⏳ 9 EMA Pulback",
+                                                                breakout_time=tracker.bear_breakdown_time.strftime('%H:%M') if tracker.bear_breakdown_time else time_fmt,
+                                                                pullback_time=time_fmt, entry_time="--:--",
+                                                                clean_pdh=tracker.pdl, entry_price=tracker.swing_low, sl_price=prev_c['High'],
+                                                                t1=round(tracker.swing_low - 2.0 * risk_pts, 2),
+                                                                t2=round(tracker.swing_low - 4.0 * risk_pts, 2),
+                                                                risk_pct=round((risk_pts / tracker.swing_low) * 100.0, 2),
+                                                                direction="SHORT"
+                                                            )
+
+                                        # Step 3: TDL Extreme Wick Breakdown -> Short Entry Confirmed!
+                                        elif tracker.bear_state == 'BEAR_PULLBACK_CONFIRMED' and not tracker.bear_msg3_sent:
+                                            if tracker.bear_breakdown_time is not None and c.name > tracker.bear_breakdown_time:
+                                                if c.name not in tracker.bear_evaluated_candles:
+                                                    tracker.bear_evaluated_candles.add(c.name)
+                                                    # Entry triggers ONLY when price crosses below the extreme WICK of TDL!
+                                                    if c_low < tracker.swing_low:
+                                                        tracker.bear_state = 'CONFIRMED'
+                                                        tracker.bear_msg3_sent = True
+                                                        
+                                                        entry_price = round(min(c_open, tracker.swing_low - 0.05), 2)
+                                                        # SL on Previous Candle High
+                                                        prev_high = float(prev_c['High'])
+                                                        sl_price = round(prev_high, 2)
+                                                        if sl_price <= entry_price:
+                                                            sl_price = round(max(prev_high, entry_price * (1.0 + 0.003)), 2)
+                                                            
+                                                        risk_pts = max(0.10, round(sl_price - entry_price, 2))
+                                                        risk_pct = round((risk_pts / entry_price) * 100.0, 2)
+                                                        t1 = round(entry_price - 2.0 * risk_pts, 2)
+                                                        t2 = round(entry_price - 4.0 * risk_pts, 2)
+                                                        
+                                                        alert3_bear = f"🔴 {sym} → {time_fmt} Trade Setup Active ✅"
+                                                        print(f"🎯 [SENDING TELEGRAM] {alert3_bear}")
+                                                        try:
+                                                            bot.send_message(CHAT_ID, alert3_bear)
+                                                        except Exception as err:
+                                                            print(f"[TG ERROR] {err}")
+
                                                         record_live_alert(
-                                                            sym=sym, stage=2, badge="⏳ 9 EMA Retest Ready",
+                                                            sym=sym, stage=3, badge="🔴 Short Entry Confirmed ✅",
                                                             breakout_time=tracker.bear_breakdown_time.strftime('%H:%M') if tracker.bear_breakdown_time else time_fmt,
-                                                            pullback_time=time_fmt, entry_time="--:--",
-                                                            clean_pdh=tracker.pdl, entry_price=tracker.swing_low, sl_price=prev_c['High'],
-                                                            t1=round(tracker.swing_low - 2.0 * risk_pts, 2),
-                                                            t2=round(tracker.swing_low - 3.0 * risk_pts, 2),
-                                                            risk_pct=round((risk_pts / tracker.swing_low) * 100.0, 2),
+                                                            pullback_time=tracker.bear_pullback_time.strftime('%H:%M') if tracker.bear_pullback_time else time_fmt,
+                                                            entry_time=time_fmt,
+                                                            clean_pdh=tracker.pdl, entry_price=entry_price, sl_price=sl_price,
+                                                            t1=t1, t2=t2, risk_pct=risk_pct,
                                                             direction="SHORT"
                                                         )
-
-                                    # Tier 4: Swing Low Breakdown Entry Confirmation
-                                    elif tracker.bear_state == 'BEAR_PULLBACK_CONFIRMED' and not tracker.bear_msg3_sent:
-                                        if tracker.bear_breakdown_time is not None and c.name > tracker.bear_breakdown_time:
-                                            if c.name not in tracker.bear_evaluated_candles:
-                                                tracker.bear_evaluated_candles.add(c.name)
-                                                # USER RULE 3: Swing Low break karke niche nikalte hi Short Entry Confirmed!
-                                                if c_low <= tracker.swing_low:
-                                                    tracker.bear_state = 'CONFIRMED'
-                                                    tracker.bear_msg3_sent = True
-                                                    
-                                                    entry_price = round(min(c_open, tracker.swing_low - max(0.10, tracker.swing_low * 0.0005)), 2)
-                                                    
-                                                    # USER RULE 4: Entry candle se theek pichhli candle (prev_c) ka High pr SL
-                                                    prev_high = float(prev_c['High'])
-                                                    sl_price = round(prev_high, 2)
-                                                    if sl_price <= entry_price:
-                                                        sl_price = round(max(prev_high, entry_price * (1.0 + 0.004)), 2)
-                                                        
-                                                    risk_pts = max(0.10, round(sl_price - entry_price, 2))
-                                                    risk_pct = round((risk_pts / entry_price) * 100.0, 2)
-                                                    t1 = round(entry_price - 2.0 * risk_pts, 2)
-                                                    t2 = round(entry_price - 3.0 * risk_pts, 2)
-                                                    
-                                                    n_c = nifty_info.get('close', 0)
-                                                    n_e = nifty_info.get('ema9', 0)
-                                                    n_stat = "9 EMA ke Niche 🔴" if n_c <= n_e else "9 EMA ke Upar ⚠️"
-                                                    
-                                                    b_c = banknifty_info.get('close', 0)
-                                                    b_e = banknifty_info.get('ema9', 0)
-                                                    b_stat = "9 EMA ke Niche 🔴" if b_c <= b_e else "9 EMA ke Upar ⚠️"
-                                                    
-                                                    s_c = sec_info.get('close', 0)
-                                                    s_e = sec_info.get('ema9', 0)
-                                                    sec_stat = "9 EMA ke Niche 🔴" if s_c <= s_e else "9 EMA ke Upar ⚠️"
-                                                    
-                                                    alert3_bear = f"🔴 {sym} → {time_fmt} Trade Setup Active ✅"
-                                                    print(f"🎯 [SENDING TELEGRAM] {alert3_bear}")
-                                                    try:
-                                                        bot.send_message(CHAT_ID, alert3_bear)
-                                                    except Exception as err:
-                                                        print(f"[TG ERROR] {err}")
-
-                                                    record_live_alert(
-                                                        sym=sym, stage=3, badge="🔴 Short Entry Confirmed ✅",
-                                                        breakout_time=tracker.bear_breakdown_time.strftime('%H:%M') if tracker.bear_breakdown_time else time_fmt,
-                                                        pullback_time=time_fmt, entry_time=time_fmt,
-                                                        clean_pdh=tracker.pdl, entry_price=entry_price, sl_price=sl_price,
-                                                        t1=t1, t2=t2, risk_pct=risk_pct,
-                                                        direction="SHORT"
-                                                    )
-                                                elif c_close > c_ema9 * 1.015:
-                                                    tracker.bear_state = 'IDLE'
                         except Exception:
                             continue
                 except Exception:
