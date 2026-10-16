@@ -203,13 +203,17 @@
           </span>
         </div>
 
-        <!-- 1. Primary View Switcher (Market Home vs Trading Terminal) -->
+        <!-- 1. Primary View Switcher (Market Home vs Trading Terminal vs Live Positions) -->
         <div class="flex items-center space-x-0.5 bg-gray-100 dark:bg-gray-800 p-0.5 rounded-lg border border-gray-200 dark:border-gray-700 text-[11px] font-semibold shrink-0">
           <button onclick="switchMainView('home')" id="nav-btn-home" class="h-7 px-2.5 rounded-md transition flex items-center whitespace-nowrap bg-white dark:bg-gray-700 text-blue-600 dark:text-blue-400 shadow-xs font-semibold cursor-pointer">
             <i class="fa-solid fa-house mr-1 text-[10px]"></i> Market Home
           </button>
           <button onclick="switchMainView('terminal')" id="nav-btn-terminal" class="h-7 px-2.5 rounded-md transition flex items-center whitespace-nowrap text-gray-600 dark:text-gray-300 hover:text-gray-900 dark:hover:text-white font-medium cursor-pointer">
             <i class="fa-solid fa-chart-line mr-1 text-[10px]"></i> Terminal
+          </button>
+          <button onclick="switchMainView('positions')" id="nav-btn-positions" class="h-7 px-2.5 rounded-md transition flex items-center whitespace-nowrap text-gray-600 dark:text-gray-300 hover:text-gray-900 dark:hover:text-white font-medium cursor-pointer" title="Live Running Paper Trading Positions">
+            <i class="fa-solid fa-briefcase mr-1 text-[10px]"></i> Live Positions
+            <span id="nav-badge-positions" class="ml-1.5 px-1.5 py-0.5 rounded-full text-[9px] font-mono font-bold bg-blue-100 text-blue-700 dark:bg-blue-950 dark:text-blue-300">0</span>
           </button>
         </div>
 
@@ -315,6 +319,13 @@
       <div class="flex items-center justify-center h-64 text-gray-400">
         <i class="fa-solid fa-circle-notch fa-spin text-2xl mr-3 text-blue-500"></i> Loading Market Overview...
       </div>
+    </div>
+
+    <!-- =============================================================================== -->
+    <!-- VIEW C: 💼 LIVE POSITIONS DESK (Real-Time Trade Monitor & Controls)              -->
+    <!-- =============================================================================== -->
+    <div id="view-live-positions" class="flex-1 overflow-y-auto p-4 md:p-6 space-y-5 bg-gray-50/50 dark:bg-[#0a0e17] hidden">
+      <!-- Content populated dynamically via renderLivePositionsDesk() -->
     </div>
 
     <!-- =============================================================================== -->
@@ -1218,28 +1229,42 @@
       currentMainView = view;
       const vHome = document.getElementById("view-market-home");
       const vTerminal = document.getElementById("view-trading-terminal");
+      const vPositions = document.getElementById("view-live-positions");
       const btnHome = document.getElementById("nav-btn-home");
       const btnTerminal = document.getElementById("nav-btn-terminal");
+      const btnPositions = document.getElementById("nav-btn-positions");
+
+      const activeClass = "h-7 px-2.5 rounded-md transition flex items-center whitespace-nowrap bg-white dark:bg-gray-700 text-blue-600 dark:text-blue-400 shadow-xs font-semibold";
+      const inactiveClass = "h-7 px-2.5 rounded-md transition flex items-center whitespace-nowrap text-gray-600 dark:text-gray-300 hover:text-gray-900 dark:hover:text-white font-medium cursor-pointer";
+
+      // Hide all 3 main views
+      if (vHome) vHome.classList.add("hidden");
+      if (vTerminal) vTerminal.classList.add("hidden");
+      if (vPositions) vPositions.classList.add("hidden");
+
+      if (btnHome) btnHome.className = inactiveClass;
+      if (btnTerminal) btnTerminal.className = inactiveClass;
+      if (btnPositions) btnPositions.className = inactiveClass;
 
       if (view === "home") {
-        vHome.classList.remove("hidden");
-        vTerminal.classList.add("hidden");
-        btnHome.className = "h-7 px-2.5 rounded-md transition flex items-center whitespace-nowrap bg-white dark:bg-gray-700 text-blue-600 dark:text-blue-400 shadow-xs font-semibold";
-        btnTerminal.className = "h-7 px-2.5 rounded-md transition flex items-center whitespace-nowrap text-gray-600 dark:text-gray-300 hover:text-gray-900 dark:hover:text-white font-medium";
+        if (vHome) vHome.classList.remove("hidden");
+        if (btnHome) btnHome.className = activeClass;
         if (marketOverviewData) {
           renderMarketOverview(marketOverviewData);
         } else {
           fetchMarketOverview();
         }
-      } else {
-        vHome.classList.add("hidden");
-        vTerminal.classList.remove("hidden");
-        btnTerminal.className = "h-7 px-2.5 rounded-md transition flex items-center whitespace-nowrap bg-white dark:bg-gray-700 text-blue-600 dark:text-blue-400 shadow-xs font-semibold";
-        btnHome.className = "h-7 px-2.5 rounded-md transition flex items-center whitespace-nowrap text-gray-600 dark:text-gray-300 hover:text-gray-900 dark:hover:text-white font-medium";
+      } else if (view === "terminal") {
+        if (vTerminal) vTerminal.classList.remove("hidden");
+        if (btnTerminal) btnTerminal.className = activeClass;
         setTimeout(() => {
           handleChartsResize();
           resetStockChartView();
         }, 80);
+      } else if (view === "positions") {
+        if (vPositions) vPositions.classList.remove("hidden");
+        if (btnPositions) btnPositions.className = activeClass;
+        fetchPositions().then(() => renderLivePositionsDesk());
       }
     }
 
@@ -3743,15 +3768,21 @@
       setTimeout(handleChartsResize, 40);
     }
 
-    // Positions Drawer
+    // Positions Drawer & Live Positions Desk
     async function fetchPositions() {
       try {
         const res = await fetch("/api/positions");
         const data = await res.json();
         openPositions = data.positions || [];
-        document.getElementById("badge-positions-count").innerText = openPositions.length;
+        const badge = document.getElementById("badge-positions-count");
+        if (badge) badge.innerText = openPositions.length;
+        const navBadge = document.getElementById("nav-badge-positions");
+        if (navBadge) navBadge.innerText = openPositions.length;
         if (activeDrawerTab === "positions") {
           renderPositionsDrawer(document.getElementById("drawer-body"));
+        }
+        if (currentMainView === "positions") {
+          renderLivePositionsDesk();
         }
       } catch (e) {}
     }
@@ -3940,6 +3971,299 @@
         await fetchPositions();
       } catch (err) {
         alert("Error executing Target 1 rule: " + err);
+      }
+    }
+
+    // ---------------------------------------------------------------------------------
+    // VIEW C: LIVE POSITIONS DESK (Real-Time Trade Monitor & Management)
+    // ---------------------------------------------------------------------------------
+    async function squareOffAllPositions() {
+      if (!openPositions || openPositions.length === 0) return;
+      if (!confirm(`Are you sure you want to Square Off (Cut) ALL ${openPositions.length} active live positions?`)) return;
+      for (const p of openPositions) {
+        try {
+          await fetch("/api/order/close", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ position_id: p.id, exit_price: p.ltp, pct_to_close: 100, exit_reason: "Square Off All" })
+          });
+        } catch (err) {}
+      }
+      alert("✅ All open positions squared off successfully!");
+      await fetchWallet();
+      await fetchPositions();
+    }
+
+    function renderLivePositionsDesk() {
+      const container = document.getElementById("view-live-positions");
+      if (!container) return;
+
+      const totalUnrealized = openPositions.reduce((sum, p) => sum + (p.unrealized_pnl || 0), 0);
+      const isProfit = totalUnrealized >= 0;
+      const longCount = openPositions.filter(p => p.side !== "SELL").length;
+      const shortCount = openPositions.filter(p => p.side === "SELL").length;
+      const greenTrades = openPositions.filter(p => (p.unrealized_pnl || 0) >= 0).length;
+      const redTrades = openPositions.filter(p => (p.unrealized_pnl || 0) < 0).length;
+
+      container.innerHTML = `
+        <!-- TOP STATS CARDS BAR -->
+        <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+          <!-- 1. Total Live P&L Card -->
+          <div class="bg-white dark:bg-[#111827] p-4 rounded-2xl border ${isProfit ? 'border-emerald-200 dark:border-emerald-800/80 bg-emerald-50/20' : 'border-rose-200 dark:border-rose-800/80 bg-rose-50/20'} shadow-xs flex flex-col justify-between">
+            <div class="flex items-center justify-between text-xs text-gray-500 dark:text-gray-400">
+              <span class="font-medium flex items-center">
+                <span class="w-2.5 h-2.5 rounded-full ${isProfit ? 'bg-emerald-500 animate-pulse' : 'bg-rose-500'} mr-1.5"></span>
+                Total Live Unrealized P&L
+              </span>
+              <span class="text-[10px] font-mono px-2 py-0.5 rounded font-bold ${isProfit ? 'bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300' : 'bg-rose-100 text-rose-800 dark:bg-rose-950 dark:text-rose-300'}">
+                ${isProfit ? 'PROFIT 🟢' : 'LOSS 🔴'}
+              </span>
+            </div>
+            <div class="my-2">
+              <span class="text-2xl font-bold font-mono ${isProfit ? 'text-emerald-600 dark:text-emerald-400' : 'text-rose-600 dark:text-rose-400'}">
+                ${isProfit ? '+' : ''}₹${totalUnrealized.toLocaleString('en-IN', {minimumFractionDigits: 2, maximumFractionDigits: 2})}
+              </span>
+            </div>
+            <div class="flex justify-between text-[11px] font-mono text-gray-500">
+              <span>Realized: <b class="${walletInfo.realized_pnl >= 0 ? 'text-emerald-600' : 'text-rose-600'}">${walletInfo.realized_pnl >= 0 ? '+' : ''}₹${walletInfo.realized_pnl.toFixed(0)}</b></span>
+              <span>Win/Loss: <b>${greenTrades}G / ${redTrades}R</b></span>
+            </div>
+          </div>
+
+          <!-- 2. Active Positions Count Card -->
+          <div class="bg-white dark:bg-[#111827] p-4 rounded-2xl border border-gray-200 dark:border-gray-800 shadow-xs flex flex-col justify-between">
+            <div class="flex items-center justify-between text-xs text-gray-500 dark:text-gray-400">
+              <span class="font-medium">Active Open Positions</span>
+              <span class="text-[10px] font-mono bg-blue-50 dark:bg-blue-950/60 text-blue-600 dark:text-blue-400 px-1.5 py-0.5 rounded font-bold">LIVE DESK</span>
+            </div>
+            <div class="my-2 flex items-baseline space-x-2">
+              <span class="text-2xl font-bold font-mono text-gray-900 dark:text-white">${openPositions.length}</span>
+              <span class="text-xs text-gray-400 font-sans">Trades Active (1-Lot)</span>
+            </div>
+            <div class="flex justify-between text-[11px] font-mono font-semibold">
+              <span class="text-emerald-600 dark:text-emerald-400">🟢 Long: ${longCount}</span>
+              <span class="text-rose-600 dark:text-rose-400">🔴 Short: ${shortCount}</span>
+            </div>
+          </div>
+
+          <!-- 3. Virtual Funds & Margin Card -->
+          <div class="bg-white dark:bg-[#111827] p-4 rounded-2xl border border-gray-200 dark:border-gray-800 shadow-xs flex flex-col justify-between">
+            <div class="flex items-center justify-between text-xs text-gray-500 dark:text-gray-400">
+              <span class="font-medium">Available Margin</span>
+              <span class="text-emerald-600 hover:underline cursor-pointer text-xs font-bold" onclick="openDepositModal()">+ Add Funds</span>
+            </div>
+            <div class="my-2">
+              <span class="text-2xl font-bold font-mono text-gray-900 dark:text-white">₹${walletInfo.available_margin.toLocaleString('en-IN', {maximumFractionDigits: 0})}</span>
+            </div>
+            <div class="flex justify-between text-[11px] font-mono text-gray-500">
+              <span>Used: <b>₹${walletInfo.used_margin.toLocaleString('en-IN', {maximumFractionDigits: 0})}</b></span>
+              <span>Total: <b>₹${walletInfo.balance.toLocaleString('en-IN', {maximumFractionDigits: 0})}</b></span>
+            </div>
+          </div>
+
+          <!-- 4. Quick Actions Desk Card -->
+          <div class="bg-gradient-to-br from-blue-600 to-indigo-700 text-white p-4 rounded-2xl shadow-sm flex flex-col justify-between">
+            <div class="flex items-center justify-between text-xs">
+              <span class="font-semibold text-blue-100 flex items-center">
+                <i class="fa-solid fa-bolt mr-1.5"></i> Trade Controls
+              </span>
+              <span class="bg-white/20 text-white text-[10px] px-2 py-0.5 rounded-full font-mono font-bold">${openPositions.length} Running</span>
+            </div>
+            <div class="text-[11px] text-blue-100 my-1">
+              Auto 1-Lot entries open on Step 3 Entry. Control your trades below:
+            </div>
+            <div class="grid grid-cols-2 gap-2 mt-2">
+              <button onclick="switchMainView('terminal'); openDrawer('orders');" class="bg-emerald-500 hover:bg-emerald-400 text-white text-xs font-bold py-1.5 px-2 rounded-lg shadow-xs transition flex items-center justify-center cursor-pointer">
+                <i class="fa-solid fa-plus mr-1 text-[10px]"></i> + Add Order
+              </button>
+              <button onclick="squareOffAllPositions()" class="bg-rose-500 hover:bg-rose-400 text-white text-xs font-bold py-1.5 px-2 rounded-lg shadow-xs transition flex items-center justify-center cursor-pointer" ${openPositions.length === 0 ? 'disabled opacity-50' : ''}>
+                <i class="fa-solid fa-power-off mr-1 text-[10px]"></i> Close All
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <!-- POSITIONS DESK CONTENT -->
+        <div class="bg-white dark:bg-[#111827] rounded-2xl border border-gray-200 dark:border-gray-800 shadow-xs overflow-hidden flex flex-col">
+          <div class="p-4 border-b border-gray-100 dark:border-gray-800 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+            <div class="flex items-center space-x-2.5">
+              <span class="w-8 h-8 rounded-xl bg-blue-600 text-white flex items-center justify-center font-bold text-sm shadow-xs">
+                <i class="fa-solid fa-briefcase"></i>
+              </span>
+              <div>
+                <h3 class="font-bold text-base text-gray-900 dark:text-white flex items-center">
+                  Live Active Positions Monitor
+                  <span class="ml-2 px-2 py-0.5 rounded-full text-[10px] font-mono font-bold ${openPositions.length > 0 ? 'bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300' : 'bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-400'}">
+                    ${openPositions.length} ACTIVE
+                  </span>
+                </h3>
+                <p class="text-xs text-gray-500 dark:text-gray-400">
+                  Real-time auto paper trading with 1-Lot execution, trailing SL & Target monitor.
+                </p>
+              </div>
+            </div>
+
+            <div class="flex items-center space-x-2">
+              <button onclick="fetchPositions()" class="px-3 py-1.5 rounded-xl bg-gray-100 dark:bg-gray-800 hover:bg-gray-200 dark:hover:bg-gray-700 text-gray-700 dark:text-gray-300 font-semibold text-xs transition flex items-center">
+                <i class="fa-solid fa-rotate mr-1.5 text-xs"></i> Refresh
+              </button>
+            </div>
+          </div>
+
+          ${openPositions.length === 0 ? `
+            <div class="p-12 text-center space-y-3">
+              <div class="w-14 h-14 mx-auto rounded-2xl bg-blue-50 dark:bg-blue-950/60 text-blue-600 flex items-center justify-center text-2xl shadow-xs">
+                <i class="fa-solid fa-briefcase"></i>
+              </div>
+              <h4 class="font-bold text-base text-gray-900 dark:text-white">Abhi Koi Live Trade Running Nahi Hai</h4>
+              <p class="text-xs text-gray-500 max-w-md mx-auto leading-relaxed">
+                Jaise hi Live Strategy Scanner mein <b>Step 3 (Entry Confirmed)</b> trigger hoga, 1-Lot position yahan <b>automatically open</b> ho jayegi! Aap yahan se manual order bhi laga sakte hain.
+              </p>
+              <div class="pt-2">
+                <button onclick="switchMainView('terminal'); openDrawer('orders');" class="px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white rounded-xl text-xs font-bold shadow-xs transition cursor-pointer">
+                  <i class="fa-solid fa-plus mr-1.5"></i> + Place Manual Order
+                </button>
+              </div>
+            </div>
+          ` : `
+            <div class="overflow-x-auto">
+              <table class="w-full text-left text-xs font-sans">
+                <thead class="bg-gray-50/80 dark:bg-gray-800/60 border-b border-gray-200 dark:border-gray-800 text-[11px] font-semibold text-gray-500 dark:text-gray-400 sticky top-0 z-10 backdrop-blur-xs">
+                  <tr>
+                    <th class="py-3 px-3.5">#</th>
+                    <th class="py-3 px-3.5">Stock</th>
+                    <th class="py-3 px-3.5">Side</th>
+                    <th class="py-3 px-3.5">Lot / Qty</th>
+                    <th class="py-3 px-3.5 text-right">Entry Price</th>
+                    <th class="py-3 px-3.5 text-right">LTP</th>
+                    <th class="py-3 px-3.5 text-right">Running P&L</th>
+                    <th class="py-3 px-3.5 text-center">Stop Loss</th>
+                    <th class="py-3 px-3.5 text-right">Target 1 & 2</th>
+                    <th class="py-3 px-3.5 text-center">Actions</th>
+                  </tr>
+                </thead>
+                <tbody class="divide-y divide-gray-100 dark:divide-gray-800/80 font-mono">
+                  ${openPositions.map((p, idx) => {
+                    const isProfit = p.unrealized_pnl >= 0;
+                    const isSell = p.side === "SELL";
+                    const isEmaViolated = p.ema_violated === true;
+                    const color = getAvatarColor(p.symbol);
+                    const comp = (watchlistData.find(s => s.symbol === p.symbol) || {}).company_name || p.symbol;
+
+                    return `
+                      <tr class="hover:bg-blue-50/30 dark:hover:bg-blue-950/20 transition">
+                        <td class="py-3 px-3.5 font-bold text-gray-400">${idx + 1}</td>
+                        <td class="py-3 px-3.5">
+                          <div class="flex items-center space-x-2.5 cursor-pointer" onclick="openStockInTerminal('${p.symbol}')" title="Open Chart">
+                            <div class="w-8 h-8 rounded-lg flex items-center justify-center font-bold text-xs shrink-0 shadow-xs" style="background-color: ${color.bg}; color: ${color.text};">
+                              ${p.symbol.substring(0, 2)}
+                            </div>
+                            <div>
+                              <span class="font-bold text-gray-900 dark:text-white block font-sans">${p.symbol}</span>
+                              <span class="text-[10px] text-gray-400 block truncate max-w-[130px] font-sans">${comp}</span>
+                            </div>
+                          </div>
+                        </td>
+                        <td class="py-3 px-3.5">
+                          <span class="px-2 py-0.5 rounded text-[10px] font-bold ${isSell ? 'bg-rose-100 text-rose-700 dark:bg-rose-950/70 dark:text-rose-300 border border-rose-200 dark:border-rose-900' : 'bg-emerald-100 text-emerald-700 dark:bg-emerald-950/70 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-900'}">
+                            ${isSell ? '🔴 SELL' : '🟢 BUY'}
+                          </span>
+                        </td>
+                        <td class="py-3 px-3.5 text-gray-700 dark:text-gray-300">
+                          <b>${p.qty}</b> <span class="text-[10px] text-gray-400 font-sans">Qty (1 Lot)</span>
+                        </td>
+                        <td class="py-3 px-3.5 text-right">
+                          <b class="text-gray-900 dark:text-white">₹${p.entry_price.toFixed(2)}</b>
+                          <span class="text-[10px] text-gray-400 block">${p.entry_time || '--:--'}</span>
+                        </td>
+                        <td class="py-3 px-3.5 text-right font-bold text-gray-900 dark:text-white">
+                          ₹${p.ltp.toFixed(2)}
+                          ${p.ema9 > 0 ? `<span class="text-[10px] text-amber-500 block font-normal">9E: ₹${p.ema9.toFixed(1)}</span>` : ''}
+                        </td>
+                        <td class="py-3 px-3.5 text-right font-bold text-sm ${isProfit ? 'text-emerald-600 dark:text-emerald-400' : 'text-rose-600 dark:text-rose-400'}">
+                          ${isProfit ? '+' : ''}₹${p.unrealized_pnl.toFixed(2)}
+                          <span class="text-[10px] block font-semibold">${isProfit ? '+' : ''}${p.unrealized_pct.toFixed(2)}%</span>
+                        </td>
+                        <td class="py-3 px-3.5 text-center">
+                          <div class="flex items-center justify-center space-x-1.5">
+                            <span class="text-rose-600 dark:text-rose-400 font-bold">₹${p.sl_price.toFixed(2)}</span>
+                            <button onclick="toggleDeskEditSL(${p.id})" class="p-1 rounded hover:bg-gray-100 dark:hover:bg-gray-800 text-blue-600 dark:text-blue-400 text-xs cursor-pointer" title="Edit Stop Loss">
+                              <i class="fa-solid fa-pen-to-square"></i>
+                            </button>
+                          </div>
+                          <!-- Inline Edit SL Box -->
+                          <div id="desk-sl-box-${p.id}" class="hidden mt-2 p-2 rounded-lg bg-blue-50 dark:bg-blue-950/60 border border-blue-200 dark:border-blue-900 space-y-1.5 text-left font-sans">
+                            <div class="flex items-center justify-between text-[10px]">
+                              <span class="font-bold text-blue-900 dark:text-blue-300">Set SL:</span>
+                              <button onclick="setDeskSL(${p.id}, ${p.entry_price})" class="text-blue-600 hover:underline">Cost (₹${p.entry_price.toFixed(1)})</button>
+                            </div>
+                            <div class="flex space-x-1">
+                              <input type="number" step="0.05" id="desk-sl-input-${p.id}" value="${p.sl_price.toFixed(2)}" class="w-20 bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-700 px-1.5 py-0.5 rounded text-xs font-mono">
+                              <button onclick="saveDeskPositionSL(${p.id})" class="bg-blue-600 text-white px-2 py-0.5 rounded text-[10px] font-bold">Save</button>
+                              <button onclick="toggleDeskEditSL(${p.id})" class="text-gray-400 text-[10px]">✕</button>
+                            </div>
+                          </div>
+                        </td>
+                        <td class="py-3 px-3.5 text-right font-semibold text-[11px] text-emerald-600">
+                          ₹${p.target1_price ? p.target1_price.toFixed(2) : '--'} / ₹${p.target2_price ? p.target2_price.toFixed(2) : '--'}
+                        </td>
+                        <td class="py-3 px-3.5 text-center font-sans">
+                          <div class="flex items-center justify-center space-x-1.5">
+                            <button onclick="closePosition(${p.id}, ${p.ltp}, 100, 'Full Square Off')" class="px-2.5 py-1.5 rounded-lg bg-rose-600 hover:bg-rose-500 text-white font-bold text-xs shadow-xs transition active:scale-95 cursor-pointer" title="Square Off (Cut Position Now)">
+                              <i class="fa-solid fa-scissors mr-1"></i> Cut
+                            </button>
+                            <button onclick="book50AndTrailToCost(${p.id}, ${p.ltp}, ${p.entry_price})" class="px-2 py-1.5 rounded-lg bg-emerald-50 dark:bg-emerald-950/60 hover:bg-emerald-100 text-emerald-700 dark:text-emerald-300 border border-emerald-300 dark:border-emerald-800 font-bold text-[11px] transition cursor-pointer" title="Target 1 Book 50% & SL to Cost">
+                              🎯 50%
+                            </button>
+                            <button onclick="openStockInTerminal('${p.symbol}')" class="px-2 py-1.5 rounded-lg bg-gray-100 dark:bg-gray-800 hover:bg-blue-600 hover:text-white text-gray-700 dark:text-gray-300 font-semibold text-[11px] transition cursor-pointer" title="Open Live 5m Chart">
+                              <i class="fa-solid fa-chart-line"></i>
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    `;
+                  }).join('')}
+                </tbody>
+              </table>
+            </div>
+          `}
+        </div>
+      `;
+    }
+
+    function toggleDeskEditSL(posId) {
+      const el = document.getElementById(`desk-sl-box-${posId}`);
+      if (el) el.classList.toggle("hidden");
+    }
+
+    function setDeskSL(posId, val) {
+      const inp = document.getElementById(`desk-sl-input-${posId}`);
+      if (inp) inp.value = Number(val).toFixed(2);
+    }
+
+    async function saveDeskPositionSL(posId) {
+      const inp = document.getElementById(`desk-sl-input-${posId}`);
+      if (!inp) return;
+      const newSL = parseFloat(inp.value);
+      if (isNaN(newSL) || newSL <= 0) {
+        alert("Please enter a valid Stop Loss price");
+        return;
+      }
+      try {
+        const res = await fetch("/api/order/update_sl", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ position_id: posId, new_sl: newSL })
+        });
+        const data = await res.json();
+        if (res.ok) {
+          alert(`✅ Stop Loss updated to ₹${newSL.toFixed(2)}`);
+          await fetchPositions();
+        } else {
+          alert(`Update Error: ${data.detail || 'Failed to update SL'}`);
+        }
+      } catch (err) {
+        alert(`Error updating SL: ${err}`);
       }
     }
 

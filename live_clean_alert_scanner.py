@@ -91,6 +91,40 @@ def record_live_alert(sym, stage, badge, breakout_time, pullback_time, entry_tim
     except Exception as e:
         print(f"[CACHE LOG ERROR] {e}")
 
+# Load 1-Lot F&O Sizes
+LOT_SIZES = {}
+csv_lots = os.path.join(BASE_DIR, 'FNO_154_STOCKS_WITH_LOT_AND_MARGIN.csv')
+if not os.path.exists(csv_lots):
+    csv_lots = os.path.join(os.path.dirname(BASE_DIR), 'FNO_154_STOCKS_WITH_LOT_AND_MARGIN.csv')
+if os.path.exists(csv_lots):
+    try:
+        df_l = pd.read_csv(csv_lots)
+        for _, r in df_l.iterrows():
+            LOT_SIZES[str(r["Stock"]).strip().upper()] = int(r["Lot_Size"])
+    except Exception:
+        pass
+
+def auto_open_paper_position(sym, side, entry_price, sl_price, t1, t2):
+    """Automatically opens 1-Lot live paper position in terminal database when Step 3 Entry is confirmed."""
+    try:
+        import database as db
+        db.init_db()
+        existing = [p for p in db.get_open_positions() if p['symbol'] == sym]
+        if not existing:
+            qty = LOT_SIZES.get(sym, 100)
+            db.open_position(
+                symbol=sym,
+                qty=qty,
+                entry_price=entry_price,
+                sl_price=sl_price,
+                target1=t1,
+                target2=t2,
+                side=side
+            )
+            print(f"💼 [AUTO LIVE POSITION] Opened 1 Lot ({qty} qty) of {sym} ({side}) at ₹{entry_price:.2f} in Paper Trading Desk!")
+    except Exception as err:
+        print(f"[AUTO POSITION ERR {sym}] {err}")
+
 class SimpleStockTracker:
     def __init__(self, symbol, pdh, pdl):
         self.symbol = symbol
@@ -630,6 +664,9 @@ def run_live_scanner():
                                                             direction="LONG"
                                                         )
 
+                                                        # Open 1 Lot Live Paper Position in Terminal
+                                                        auto_open_paper_position(sym=sym, side="BUY", entry_price=entry_price, sl_price=sl_price, t1=t1, t2=t2)
+
                                 # =========================================================
                                 # 🔴 BEARISH SETUP (CLEAN PDL BREAKDOWN + 9 EMA PULLBACK + TDL WICK CROSS)
                                 # =========================================================
@@ -738,6 +775,9 @@ def run_live_scanner():
                                                             t1=t1, t2=t2, risk_pct=risk_pct,
                                                             direction="SHORT"
                                                         )
+
+                                                        # Open 1 Lot Live Paper Position in Terminal
+                                                        auto_open_paper_position(sym=sym, side="SELL", entry_price=entry_price, sl_price=sl_price, t1=t1, t2=t2)
                         except Exception:
                             continue
                 except Exception:

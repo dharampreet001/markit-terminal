@@ -161,8 +161,10 @@ def open_position(symbol: str, qty: int, entry_price: float, sl_price: float, ta
     req_margin = round((qty * entry_price) / 5.0, 2)
     wallet = get_wallet()
     if wallet["available_margin"] < req_margin:
-        conn.close()
-        raise ValueError(f"Insufficient Available Margin! Required: ₹{req_margin:,.2f}, Available: ₹{wallet['available_margin']:,.2f}")
+        add_needed = max(500000.0, req_margin * 2.0)
+        c.execute("UPDATE wallet SET balance = balance + ?, updated_at = CURRENT_TIMESTAMP WHERE id = 1", (add_needed,))
+        c.execute("INSERT INTO funds_ledger (type, amount, note) VALUES ('AUTO_MARGIN_EXPANSION', ?, 'Auto Margin Expansion for Paper Trading')", (add_needed,))
+        conn.commit()
         
     entry_time = datetime.now().strftime("%H:%M:%S")
     order_side = side.upper() if side else "BUY"
