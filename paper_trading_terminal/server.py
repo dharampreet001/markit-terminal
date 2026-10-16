@@ -1163,6 +1163,23 @@ def get_radar_signals():
         except Exception:
             raw_alerts = []
 
+    # If live_alerts is empty, fallback to most recent archive so off-market analysis is always available
+    if not raw_alerts and os.path.exists(RADAR_ARCHIVE_DIR):
+        try:
+            arch_files = sorted(os.listdir(RADAR_ARCHIVE_DIR), reverse=True)
+            for af in arch_files:
+                if af.endswith(".json") and not af.startswith("verified_"):
+                    with open(os.path.join(RADAR_ARCHIVE_DIR, af), "r", encoding="utf-8") as f:
+                        loaded = json.load(f)
+                        if loaded:
+                            raw_alerts = loaded
+                            # Restore into live_alerts.json as well
+                            with open(live_alerts_file, "w", encoding="utf-8") as fw:
+                                json.dump(raw_alerts, fw, indent=2)
+                            break
+        except Exception:
+            pass
+
     # 2. Attach sector info and change_pct to raw alerts
     for a in raw_alerts:
         sym = a.get("symbol", "").upper()
