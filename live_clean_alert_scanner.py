@@ -535,13 +535,8 @@ def run_live_scanner():
                                             tracker.pullback_low = c_low
                                             tracker.msg1_sent = True
                                             
-                                            alert1_text = (
-                                                f"🔵 {sym} → {time_fmt} PDH Cross (Breakout) 🚨\n"
-                                                f"• Clean PDH: ₹{tracker.pdh:.2f} Crossed!\n"
-                                                f"• Current High: ₹{tracker.swing_high:.2f}\n"
-                                                f"• Status: Step 1 Complete (Abhi Entry Mat Lena! 9 EMA Pullback ka wait karo)"
-                                            )
-                                            print(f"🔔 [SENDING TELEGRAM] {sym} Breakout Alert")
+                                            alert1_text = f"🟡 {sym} → {time_fmt} Pulback Start🚨"
+                                            print(f"🔔 [SENDING TELEGRAM] {alert1_text}")
                                             try:
                                                 bot.send_message(CHAT_ID, alert1_text)
                                             except Exception as err:
@@ -549,7 +544,7 @@ def run_live_scanner():
 
                                             risk_pts = max(0.10, tracker.swing_high - tracker.pullback_low)
                                             record_live_alert(
-                                                sym=sym, stage=1, badge="🔵 Breakout Alert 🚨",
+                                                sym=sym, stage=1, badge="🟡 Breakout Alert 🚨",
                                                 breakout_time=time_fmt, pullback_time="--:--", entry_time="--:--",
                                                 clean_pdh=tracker.pdh, entry_price=tracker.swing_high, sl_price=tracker.pullback_low,
                                                 t1=round(tracker.swing_high + 2.0 * risk_pts, 2),
@@ -572,18 +567,7 @@ def run_live_scanner():
                                                     if c_close > c_open and c_close >= c_ema9 and ema_rising:
                                                         tracker.state = 'PULLBACK_CONFIRMED'
                                                         tracker.msg2_sent = True
-                                                        
-                                                        alert2_text = (
-                                                            f"🟡 {sym} → {time_fmt} 9 EMA Pullback Confirmed ⏳\n"
-                                                            f"• Dip touched 9 EMA & Reversal Candle Closed Green!\n"
-                                                            f"• Swing High Level: ₹{tracker.swing_high:.2f}\n"
-                                                            f"• Status: Jaise hi Swing High break hoga, Entry Confirmed alert aayega!"
-                                                        )
-                                                        print(f"⏳ [SENDING TELEGRAM] {sym} 9 EMA Pullback Alert")
-                                                        try:
-                                                            bot.send_message(CHAT_ID, alert2_text)
-                                                        except Exception as err:
-                                                            print(f"[TG ERROR] {err}")
+                                                        print(f"⏳ [STAGE 2 INTERNAL] {sym} → {time_fmt} 9 EMA Pullback Confirmed (Waiting for Swing High Break)")
 
                                                         risk_pts = max(0.10, tracker.swing_high - tracker.pullback_low)
                                                         record_live_alert(
@@ -634,16 +618,8 @@ def run_live_scanner():
                                                     
                                                     stk_stat = "9 EMA ke Upar 🟢" if c_close >= c_ema9 else "9 EMA ke Niche ⚠️"
                                                     
-                                                    alert3_text = (
-                                                        f"🟢 {sym} → {time_fmt} Trade Setup Active (Entry Confirmed) ✅\n"
-                                                        f"• Direction: LONG 📈\n"
-                                                        f"• Entry Price: ₹{entry_price:.2f}\n"
-                                                        f"• Stop Loss: ₹{sl_price:.2f} (Risk: {risk_pct:.2f}%)\n"
-                                                        f"• Target 1 (1:2): ₹{t1:.2f}\n"
-                                                        f"• Target 2 (1:4): ₹{t2:.2f}\n"
-                                                        f"• Market Mood: {tracker.macro_tag}"
-                                                    )
-                                                    print(f"🎯 [SENDING TELEGRAM] {sym} Entry Confirmed Alert")
+                                                    alert3_text = f"🟢 {sym} → {time_fmt} Trade Setup Active ✅"
+                                                    print(f"🎯 [SENDING TELEGRAM] {alert3_text}")
                                                     try:
                                                         bot.send_message(CHAT_ID, alert3_text)
                                                     except Exception as err:
@@ -677,13 +653,8 @@ def run_live_scanner():
                                             tracker.pullback_high = c_high
                                             tracker.bear_msg1_sent = True
 
-                                            alert1_bear = (
-                                                f"🔴 {sym} → {time_fmt} PDL Breakdown 🚨\n"
-                                                f"• Clean PDL: ₹{tracker.pdl:.2f} Broken Down!\n"
-                                                f"• Current Low: ₹{tracker.swing_low:.2f}\n"
-                                                f"• Status: Step 1 Complete (Abhi Short Entry Mat Lena! 9 EMA Bounce ka wait karo)"
-                                            )
-                                            print(f"🔔 [SENDING TELEGRAM] {sym} Breakdown Alert")
+                                            alert1_bear = f"🟡 {sym} → {time_fmt} Pulback Start🚨"
+                                            print(f"🔔 [SENDING TELEGRAM] {alert1_bear}")
                                             try:
                                                 bot.send_message(CHAT_ID, alert1_bear)
                                             except Exception as err:
@@ -714,18 +685,7 @@ def run_live_scanner():
                                                     if c_close < c_open and c_close <= c_ema9 and ema_falling:
                                                         tracker.bear_state = 'BEAR_PULLBACK_CONFIRMED'
                                                         tracker.bear_msg2_sent = True
-                                                        
-                                                        alert2_bear = (
-                                                            f"⏳ {sym} → {time_fmt} 9 EMA Resistance Retest Confirmed\n"
-                                                            f"• Bounce touched 9 EMA & Reversal Candle Closed Red!\n"
-                                                            f"• Swing Low Level: ₹{tracker.swing_low:.2f}\n"
-                                                            f"• Status: Jaise hi Swing Low breakdown hoga, Short Entry alert aayega!"
-                                                        )
-                                                        print(f"⏳ [SENDING TELEGRAM] {sym} 9 EMA Retest Alert")
-                                                        try:
-                                                            bot.send_message(CHAT_ID, alert2_bear)
-                                                        except Exception as err:
-                                                            print(f"[TG ERROR] {err}")
+                                                        print(f"⏳ [STAGE 2 INTERNAL] {sym} → {time_fmt} 9 EMA Resistance Retest Confirmed (Waiting for Swing Low Breakdown)")
 
                                                         risk_pts = max(0.10, tracker.pullback_high - tracker.swing_low)
                                                         record_live_alert(
@@ -774,16 +734,8 @@ def run_live_scanner():
                                                     s_e = sec_info.get('ema9', 0)
                                                     sec_stat = "9 EMA ke Niche 🔴" if s_c <= s_e else "9 EMA ke Upar ⚠️"
                                                     
-                                                    alert3_bear = (
-                                                        f"🔴 {sym} → {time_fmt} Short Trade Active (Entry Confirmed) ✅\n"
-                                                        f"• Direction: SHORT 📉\n"
-                                                        f"• Entry Price: ₹{entry_price:.2f}\n"
-                                                        f"• Stop Loss: ₹{sl_price:.2f} (Risk: {risk_pct:.2f}%)\n"
-                                                        f"• Target 1 (1:2): ₹{t1:.2f}\n"
-                                                        f"• Target 2 (1:4): ₹{t2:.2f}\n"
-                                                        f"• Market Mood: {tracker.bear_macro_tag}"
-                                                    )
-                                                    print(f"🎯 [SENDING TELEGRAM] {sym} Short Entry Confirmed Alert")
+                                                    alert3_bear = f"🔴 {sym} → {time_fmt} Trade Setup Active ✅"
+                                                    print(f"🎯 [SENDING TELEGRAM] {alert3_bear}")
                                                     try:
                                                         bot.send_message(CHAT_ID, alert3_bear)
                                                     except Exception as err:
