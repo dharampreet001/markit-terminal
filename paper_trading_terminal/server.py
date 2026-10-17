@@ -959,8 +959,10 @@ def check_and_perform_daily_radar_reset(force_clear: bool = False) -> Dict[str, 
     # Trigger if:
     # 1. User requested a manual force clear, OR
     # 2. It is 07:15 AM IST or later (2 hours before 09:15 AM Market Open) and today's date hasn't been reset yet.
+    # Note: Auto-reset only runs on weekdays (Monday to Friday); weekends preserve Friday's data for analysis.
+    is_weekday = now_ist.weekday() < 5
     is_reset_time = (now_ist.hour > 7) or (now_ist.hour == 7 and now_ist.minute >= 15)
-    should_clear = force_clear or (is_reset_time and last_cleared_date != today_str)
+    should_clear = force_clear or (is_weekday and is_reset_time and last_cleared_date != today_str)
 
     if should_clear:
         live_alerts_file = os.path.join(os.path.dirname(__file__), "live_alerts.json")
@@ -1055,9 +1057,9 @@ def check_and_perform_eod_squareoff(force: bool = False) -> Dict[str, Any]:
         except Exception:
             pass
 
-    last_settled_date = meta.get("last_settled_date", "")
+    is_weekday = now_ist.weekday() < 5
     is_after_market_close = (h > 15) or (h == 15 and m >= 30)
-    should_settle = force or (is_after_market_close and last_settled_date != today_str)
+    should_settle = force or (is_weekday and is_after_market_close and last_settled_date != today_str)
 
     if not should_settle:
         return {"status": "SUCCESS", "settled": False, "date": today_str, "last_settled": last_settled_date}

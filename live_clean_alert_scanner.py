@@ -401,7 +401,8 @@ def run_live_scanner():
             # 07:15 AM DAILY RADAR RESET & CLEAN LEVEL RECALCULATION (2H BEFORE OPEN)
             # -------------------------------------------------------------------------
             is_reset_time = (h_now > 7) or (h_now == 7 and m_now >= 15)
-            if is_reset_time and current_scanner_date != today_str:
+            # Reset only on weekdays (Monday to Friday); preserve weekend for off-market study
+            if is_reset_time and current_scanner_date != today_str and now_ist.weekday() < 5:
                 print(f"\n[07:15 AM RESET] New trading day detected: {today_str}. Archiving yesterday's radar & resetting...")
                 archive_dir = os.path.join(BASE_DIR, 'paper_trading_terminal', 'radar_archive')
                 os.makedirs(archive_dir, exist_ok=True)
@@ -426,13 +427,22 @@ def run_live_scanner():
                 current_scanner_date = today_str
                 print(f"[07:15 AM RESET] Radar cleared & fresh levels calculated for {today_str}!\n")
 
-            # Market hours check (09:15 to 15:30 IST)
+            # Market hours check (09:15 to 15:30 IST, Monday to Friday)
             if not is_test_run:
+                # 1. Weekend check: Saturday (5) or Sunday (6)
+                if now_ist.weekday() >= 5:
+                    day_name = now_ist.strftime('%A')
+                    print(f"[{now_str}] Weekend ({day_name}). Indian Stock Market (NSE/BSE) is CLOSED. Standby mode.")
+                    time.sleep(300)
+                    continue
+
+                # 2. Pre-market check
                 if h_now < 9 or (h_now == 9 and m_now < 15):
                     print(f"[{now_str}] Pre-market. Waiting for 09:15 AM open...")
                     time.sleep(30)
                     continue
                     
+                # 3. Post-market close check
                 if h_now > 15 or (h_now == 15 and m_now > 30):
                     print(f"[{now_str}] Market closed for today (15:30 IST). Radar & trades preserved for off-market analysis.")
                     try:
@@ -505,6 +515,12 @@ def run_live_scanner():
                             if len(df_t) < 2:
                                 continue
                                 
+                            # Strict Trading Day Check: Only process candles belonging to TODAY's live date!
+                            if not is_test_run:
+                                latest_candle_date = df_t.index[-1].strftime('%Y-%m-%d')
+                                if latest_candle_date != today_str:
+                                    continue
+
                             # Calculate 9 EMA on stock
                             df_t['EMA9'] = df_t['Close'].ewm(span=9, adjust=False).mean()
 
